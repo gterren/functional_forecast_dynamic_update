@@ -1,4 +1,4 @@
-# Dynamic Updating for Day-ahead Load, Wind and Solar Assests Operation Forecast in Modern Power Grids
+# Dynamic Updating for Load, Wind and Solar Assests Day-ahead Operation Forecast in Modern Power Grids
 
 Having set of scenarios obtained from an unbiased day-ahead forecast of load demand, solar, and wind generation across Texas-7k 2030 grid. This respository explores a set of functional data analysis tools to determine the functional envolep of a forecast. In addition, a dynamic updating method is implemented and the performances are assesed for our problem.
 
