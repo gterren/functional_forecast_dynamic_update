@@ -8,6 +8,7 @@ The functional envelop is defined by the depth notioned known as Modifided Band 
 
 ## Dynamic Updating
 
+The next to sections in the **forecast_dynamic_updating.ipynb** notebook explores the dynamic update of a forecast as actual observation become available. The dynamic updating in this notebook evaluates the resulting forecast after updating it after the 1th to 23rd hourt. Notice that the day-ahead operation forecast has hourly resolution so a forecast is provided for each hour of following day.
 
 ### Functional k-Nearest Neighbors
 
