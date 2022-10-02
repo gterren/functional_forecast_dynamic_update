@@ -8,9 +8,10 @@ The functional envelop is defined by the depth notioned known as Modifided Band 
 
 ## Dynamic Updating
 
-The next to sections in the **forecast_dynamic_updating.ipynb** notebook explores the dynamic update of a forecast as actual observation become available. The dynamic updating in this notebook evaluates the resulting forecast after updating it after the 1th to 23rd hourt. Notice that the day-ahead operation forecast has hourly resolution so a forecast is provided for each hour of following day.
+The next to sections in the **forecast_dynamic_updating.ipynb** notebook explores the dynamic update of a forecast as actual observation become available. The dynamic updating in this notebook evaluates the resulting forecast after updating it after the 1th to 23rd hour. Notice that the day-ahead operation forecast has hourly resolution so a forecast is provided for each hour of following day.
 
 ### Functional k-Nearest Neighbors
 
+The proposed method for the update is functional k-Nearest Neighbors (f-kNN). This method is based on a distance metric. The **forecast_dynamic_updating.ipynb** notebook includes the assessesment of f-kNN when using two different distances. The inverse Euclidian distance and the exponetial distance. The functional evelope requieres the validation of hyperparameter $\alpha$ for each updating interval (i.e., 1th to 23rd hour). The exponetial distance have a lengthscale hyperparameter $\gamma$ that requires also validation. 
 
-**forecast_dynamic_updating.ipynb**
+The hyperparameters are caracteristic of each Load, Solar and Wind assest in the Texas-7k 2030 grid. The validation procedure becomes computationally expensive when the distance metric includes any hyperparameter (e.g., exponential distnace $\gamma$ hyperparameter).
