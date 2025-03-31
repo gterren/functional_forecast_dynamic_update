@@ -4,7 +4,7 @@ print('Running fDepth_MSplot.csv ... ')
 
 library(fdaoutlier)
 
-path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth/'
+path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/functional_forecast_dynamic_update/fDepth/'
 
 #Dai, W., and Genton, M. G. (2018). Multivariate functional data visualization and outlier detection. Journal of Computational and Graphical Statistics, 27(4), 923-934.
 #Dai, W., and Genton, M. G. (2019). Directional outlyingness for multivariate functional data. Computational Statistics & Data Analysis, 131, 50-65.

@@ -5,7 +5,7 @@ print('Running fDepth_ED..R ... ')
 library(fdaoutlier)
 library(fda.usc)
 
-path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth/'
+path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/functional_forecast_dynamic_update/fDepth/'
 
 file_name = 'curves.csv'
 
