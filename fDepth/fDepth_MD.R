@@ -15,11 +15,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # Modal Depth
-MD_ = depth.mode(fdata(curves_))$dep
+MD = depth.mode(fdata(curves_))$dep
 
 # Save functional depth scores
-write.table(MD_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+write.table(data.frame(MD), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')

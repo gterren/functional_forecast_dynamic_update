@@ -16,13 +16,13 @@ curves_ = read.csv(paste(path_to_fDepth, 'curves.csv', sep = ''),
                    header = FALSE)
 
 # Modified Band Depth
-MSplot = msplot(curves_)
+MSplot  = msplot(curves_)
+MS_mean = MSplot$mean_outlyingness
+MS_var  = MSplot$var_outlyingness
 
 # Save functional depth scores
-X_ = as.data.frame(list(MSplot$mean_outlyingness, MSplot$var_outlyingness))
-write.table(X_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+write.table(data.frame(MS_mean, MS_var), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
 
 print('...end running')

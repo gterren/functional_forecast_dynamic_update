@@ -13,12 +13,11 @@ curves_ = read.csv(paste(path_to_fDepth, 'curves.csv', sep = ''),
                     header = FALSE)
 
 # Modified Band Depth
-MBD_ = modified_band_depth(curves_)
+MBD = modified_band_depth(curves_)
 
 # Save functional depth scores
-write.table(MBD_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+write.table(data.frame(MBD), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
 
 print('...end running')

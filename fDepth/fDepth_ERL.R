@@ -15,11 +15,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # Extreme Rank Length
-ERL_= extreme_rank_length(curves_, type = "two_sided")
+ERL = extreme_rank_length(curves_, type = "two_sided")
 
 # Save functional depth scores
-write.table(ERL_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+write.table(data.frame(ERL), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')

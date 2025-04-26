@@ -15,11 +15,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # Integrated Depth
-ID_ = depth.FM(fdata(curves_))$dep
+ID = depth.FM(fdata(curves_))$dep
 
 # Save functional depth scores
-write.table(ID_, paste(path_to_fDepth, 'fDetph.csv', sep = ''), 
+write.table(data.frame(ID), paste(path_to_fDepth, 'fDetph.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')

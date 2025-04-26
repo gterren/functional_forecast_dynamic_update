@@ -15,11 +15,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # Random Tukey dept
-RT_ = depth.RT(fdata(curves_))$dep
+RT = depth.RT(fdata(curves_))$dep
 
 # Save functional depth scores
-write.table(RT_, paste(path_to_fDepth, 'fDetph.csv', sep = ''), 
+write.table(data.frame(RT), paste(path_to_fDepth, 'fDetph.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')

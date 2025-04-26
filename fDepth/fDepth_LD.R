@@ -16,11 +16,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # L-inf norm 
-LD_ = linfinity_depth(curves_)
+LD = linfinity_depth(curves_)
 
 # Save functional depth scores
-write.table(LD_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+write.table(data.frame(LD), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')

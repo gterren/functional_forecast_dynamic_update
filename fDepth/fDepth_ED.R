@@ -14,11 +14,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    sep = ',', 
                    header = FALSE)
 # Extremal Depth
-ED_ = extremal_depth(curves_)
-# Save functional depth scores
+ED = extremal_depth(curves_)
 
-write.table(ED_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+# Save functional depth scores
+write.table(data.frame(ED), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')

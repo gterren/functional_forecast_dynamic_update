@@ -15,11 +15,11 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # Random Projection depth
-RP_ = depth.RP(fdata(curves_))$dep
+RP = depth.RP(fdata(curves_))$dep
 
 # Save functional depth scores
-write.table(RP_, paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
+write.table(data.frame(RP), paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names=FALSE, 
-            col.names=FALSE, 
             sep = ',')
+
 print('...end running')
