@@ -15,13 +15,12 @@ curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''),
                    header = FALSE)
 
 # Directional Quantile
-DQ_95 = directional_quantile(curves_, quantiles = c(0.025, 0.975))
 DQ_90 = directional_quantile(curves_, quantiles = c(0.05, 0.95))
 DQ_80 = directional_quantile(curves_, quantiles = c(0.1, 0.9))
 DQ_60 = directional_quantile(curves_, quantiles = c(0.2, 0.8))
 
 # Save functional depth scores
-write.table(data.frame(DQ_60, DQ_80, DQ_90, DQ_95), 
+write.table(data.frame(DQ_60, DQ_80, DQ_90), 
             paste(path_to_fDepth, 'fDepth.csv', sep = ''), 
             row.names = FALSE, 
             sep = ',')
