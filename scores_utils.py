@@ -229,7 +229,6 @@ def _coverages(f_ts_, f_ts_hat_, s_ts_hat_):
                                                                                                'CS80', 
                                                                                                'CS60'])
     
-
 def _proper_scores(f_ts_, f_ts_hat_, s_ts_hat_):
 
     LogS = _logarithmic_score(f_ts_, f_ts_hat_, s_ts_hat_).sum()
