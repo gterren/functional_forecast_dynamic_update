@@ -18,55 +18,60 @@ def _process_metadata(path, file_name):
     return meta_[['name', 'lon', 'lat', 'capacity']].set_index('name')
 
 # Loading and processing of historical curves for the training dataset
-def _process_training_curves(meta_, T, K, path, file_name):
+def _process_training_curves(X_tr_, assets_, T, path, file_name):
+
+    K = assets_.shape[0]
 
     ac_tr_  = pd.read_csv(path + file_name)
     ac_tr_  = ac_tr_.iloc[T:-T]
-    assets_ = ac_tr_.columns[1:K+1]
-
-    dates_ = ac_tr_[['Time']].to_numpy()
+    dates_  = ac_tr_[['Time']].to_numpy()
     
     # Consitent asset ordering
     ac_tr_ = ac_tr_[assets_].to_numpy()
-    #print(ac_tr_.shape)
+    print(ac_tr_.shape)
 
-    # Format random curves and dates
-    dates_tr_ = dates_.reshape(int(dates_.shape[0]/T), T)
-    F_tr_     = ac_tr_.reshape(int(ac_tr_.shape[0]/T), T, ac_tr_.shape[1])
-    #print(dates_tr_.shape, F_tr_.shape)
+    F_tr_     = []
+    dates_tr_ = []
+    for i in range(int(ac_tr_.shape[0]/T)):
+        dates_tr_.append(dates_[i*T:(i+1)*T, :])
+        F_tr_.append(ac_tr_[i*T:(i+1)*T, :])
+    F_tr_     = np.stack(F_tr_)
+    dates_tr_ = np.stack(dates_tr_)[..., 0]
 
     # Normalized between 0 and 1 by Max Power
     p_ = np.max(ac_tr_, axis = 0)
+
     # Utilize Max power in metadata
-    #p_ = meta_.loc[assets_, 'capacity'].to_numpy()
     for i in range(p_.shape[0]):
         F_tr_[..., i] /= p_[i]
-    print(F_tr_.min(), F_tr_.max())
+    #print(F_tr_.min(), F_tr_.max())
 
-    # Asset coordiantes
-    x_tr_ = np.concatenate([np.tile(meta_.loc[assets_, ['lon', 'lat']].to_numpy()[i, :][:, np.newaxis], 
-                                    F_tr_.shape[0]).T for i in range(p_.shape[0])], axis = 0)    
-    
+    x_tr_ = []
+    for i in range(X_tr_.shape[0]):
+        for _ in range(F_tr_.shape[0]):
+            x_tr_.append(X_tr_[i, :])
+    x_tr_ = np.stack(x_tr_)
+
     # Format random curves
-    F_tr_ = np.concatenate([F_tr_[..., i] for i in range(p_.shape[0])], axis = 0)
+    F_tr_ = np.concatenate([F_tr_[..., i] for i in range(F_tr_.shape[-1])], axis = 0)
 
     # Curve dates
     T_tr_ = np.concatenate([dates_tr_[:, 0] for i in range(p_.shape[0])], axis = 0)
     T_tr_ = np.stack([T_tr_[i][:10] for i in range(T_tr_.shape[0])], axis = 0)
     
-    return F_tr_, T_tr_, x_tr_, assets_, p_
+    return F_tr_, T_tr_, x_tr_, p_
 
 # Loading and processing of historical curves for the testing dataset
-def _process_testing_curves(meta_, assets_, p_, T, K, path, file_name):
+def _process_testing_curves(X_ts_, assets_, p_, T, path, file_name):
+
+    K = assets_.shape[0]
 
     ac_ts_ = pd.read_csv(path + file_name)
-    #print(ac_ts_.shape)
-
     dates_ = ac_ts_[['Time']].to_numpy()
     
     # Consitent asset ordering
     ac_ts_ = ac_ts_[assets_].to_numpy()
-    #print(dates_.shape, ac_ts_.shape)
+    print(dates_.shape, ac_ts_.shape)
 
     # Format random curves and dates
     dates_ts_ = dates_.reshape(int(dates_.shape[0]/T), T)
@@ -79,7 +84,7 @@ def _process_testing_curves(meta_, assets_, p_, T, K, path, file_name):
     print(F_ts_.min(), F_ts_.max())
 
     # Asset coordiantes
-    x_ts_ = meta_.loc[assets_, ['lon', 'lat']].to_numpy()
+    x_ts_ = X_ts_.copy()
     
     # Curve dates
     T_ts_ = np.stack([dates_ts_[i, 0][:10] for i in range(dates_ts_.shape[0])], axis = 0)
@@ -87,7 +92,9 @@ def _process_testing_curves(meta_, assets_, p_, T, K, path, file_name):
     return F_ts_, T_ts_, x_ts_
 
 # Loading and processing of historical day-ahead forecast for the training dataset
-def _process_traning_forecasts(assets_, p_, T, K, path, file_name):
+def _process_traning_forecasts(assets_, p_, T, path, file_name):
+    
+    K = assets_.shape[0]
 
     fc_ = pd.read_csv(path + file_name)
     
@@ -121,8 +128,9 @@ def _process_traning_forecasts(assets_, p_, T, K, path, file_name):
     return np.concatenate([E_tr_[..., i] for i in range(p_.shape[0])], axis = 0)
 
 # Loading and processing of historical day-ahead forecast for the testing dataset
-def _process_testing_forecasts(assets_, p_, T, K, path, file_name):
+def _process_testing_forecasts(assets_, p_, T, path, file_name):
 
+    K = assets_.shape[0]
 
     fc_ = pd.read_csv(path + file_name, index_col = None)
     
