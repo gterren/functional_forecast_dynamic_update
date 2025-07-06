@@ -4,14 +4,12 @@ import pandas as pd
 import numpy as np
 import pickle as pkl
 import scipy.stats as stats
-import properscoring as ps
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import geopandas as gpd
-import seaborn as sns
 
-from scores_utils import *
+from scipy.integrate import quad
+from scipy.stats import multivariate_normal, norm
 from functional_utils import _fDepth, _fQuantile
+from sklearn.neighbors import KernelDensity
+from statsmodels.distributions.empirical_distribution import ECDF
 
 from loading_utils import (_process_metadata, 
                            _process_training_curves, 
@@ -19,16 +17,10 @@ from loading_utils import (_process_metadata,
                            _process_traning_forecasts, 
                            _process_testing_forecasts)
 
-from sklearn.neighbors import KernelDensity
-from scipy.integrate import quad
-from ipywidgets import *
-from scipy.stats import multivariate_normal, norm
-from statsmodels.distributions.empirical_distribution import ECDF
-from matplotlib import cm
-from matplotlib_scalebar.scalebar import ScaleBar
 
-path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/functional_forecast_dynamic_update/fDepth'
-path_to_data   = '/Users/Guille/Desktop/dynamic_update/data'
+
+path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
+path_to_data   = '/home/gterren/dynamic_update/data'
 
 # Calculate weighted (w_) distance between X_ and x_
 def _dist(X_, x_, w_ = []):
@@ -250,12 +242,6 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
 # Timestamps in interval
 T = 288
 
-# Loading color palette
-palette_ = pd.read_csv(path_to_data + '/palette.csv')
-print(palette_)
-
-# Loading Texas map
-TX_ = gpd.read_file(path_to_data + '/maps/TX/State.shp')
 
 # Loading and processing of sites metadata
 meta_ = _process_metadata(file_name = '/wind_meta.xlsx', 
