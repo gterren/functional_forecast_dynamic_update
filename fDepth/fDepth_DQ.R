@@ -2,11 +2,15 @@
 
 print('Running fDepth_DQ.R ... ')
 
+install.packages("fdaoutlier",repos = "http://cran.us.r-project.org")
+install.packages("fda.usc",repos = "http://cran.us.r-project.org")
+
 library(fdaoutlier)
 #library(ddalpha)
 library(fda.usc)
 
 path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/functional_forecast_dynamic_update/fDepth/'
+path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth/'
 
 file_name = 'curves.csv'
 

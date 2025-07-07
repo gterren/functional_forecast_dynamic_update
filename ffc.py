@@ -7,9 +7,10 @@ import scipy.stats as stats
 
 from scipy.integrate import quad
 from scipy.stats import multivariate_normal, norm
-from functional_utils import _fDepth, _fQuantile
+from functional_utils import _fDepth, _fDepth4POD
 from sklearn.neighbors import KernelDensity
 from statsmodels.distributions.empirical_distribution import ECDF
+from mpi4py import MPI
 
 from loading_utils import (_process_metadata, 
                            _process_training_curves, 
@@ -17,164 +18,23 @@ from loading_utils import (_process_metadata,
                            _process_traning_forecasts, 
                            _process_testing_forecasts)
 
+from ffc_utils import (_euclidian_dist, 
+                           _periodic_dist, 
+                           _haversine_dist,
+                           _kernel,
+                           _logistic, 
+                           _scenario_filtering, 
+                           _exponential_growth, 
+                           _exponential_decay, 
+                           _silverman_rule, 
+                           _weighted_interval_score, 
+                           _confidence_intervals_from_eCDF, 
+                           _confidence_intervals_from_fDepth, 
+                           _confidence_intervals_from_DQ)
 
 
 path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
 path_to_data   = '/home/gterren/dynamic_update/data'
-
-# Calculate weighted (w_) distance between X_ and x_
-def _dist(X_, x_, w_ = []):
-    if len(w_) == 0:
-        w_ = np.ones(x_.shape)
-    w_ = w_/w_.sum()
-    d_ = np.zeros((X_.shape[0], ))
-    for i in range(X_.shape[0]):
-        d_[i] = w_.T @ (X_[i, :] - x_)**2
-    return d_
-
-# Radial Basis function kernel based on distance (d_)
-def _kernel(d_, length_scale):
-    w_ = np.exp(-d_/length_scale)
-    return w_#/w_.sum()
-
-def _inv_dist(d_, length_scale):
-    w_ = 1./(d_ + length_scale)
-    return w_#/w_.sum()
-
-# Define exponential growth function
-def _exponential_growth(t, dacay_rate, innit = 0):
-    tau_ = np.linspace(t - 1, 0, t)
-    return np.exp(-dacay_rate*tau_)
-
-# Define exponential dacay function
-def _exponential_decay(S, dacay_rate):
-    s_ = np.linspace(0, S - 1, S)
-    return np.exp(-dacay_rate*s_)
-
-def _haversine_dist(x_1_, x_2_):
-    """
-    Calculate the distance between two points on Earth using the Haversine formula.
-
-    Args:
-        x_1_ (float): Longitude and latitude of the first point in degrees.
-        x_2_ (float): Longitude and latitude of the second point in degrees.
-
-    Returns:
-        float: Distance between the two points in kilometers.
-    """
-    R = 6371  # Radius of Earth in kilometers
-    
-    dlat_ = np.deg2rad(x_2_[:, 1]) - np.deg2rad(x_1_[1])
-    dlon_ = np.deg2rad(x_2_[:, 0]) - np.deg2rad(x_1_[0])
-    
-    theta = np.sin(dlat_/2)**2 + np.cos(np.deg2rad(x_1_[1]))*np.cos(np.deg2rad(x_2_[:, 1]))*np.sin(dlon_/2)**2
-    
-    return 2.*R*np.arcsin(np.sqrt(theta))
-
-def _logistic(x_, k = 1.):
-    return 1. / (1. + np.exp( - k*x_))
-
-# # Fuse day-ahead forecast with real-time forecast
-# def _update_forecast(F_ac_, f_hat_, fc_, update_rate):
-
-#     w_update_ = 1. - _exponential_decay_plus(F_ac_.shape[1] + 1, update_rate)[1:]
-#     #w_update_ = eta_/eta_.max()
-#     f_update_ = f_hat_*(1. - w_update_) + fc_*w_update_
-
-#     plt.figure(figsize = (10, 2))
-#     plt.title('Trust Rate')
-#     plt.plot(w_update_)
-#     plt.show()
-
-#     return f_update_
-
-# Define a function to calculate quantiles
-def _KDE_quantile(_KDE, q_, x_min     = 0., 
-                            x_max     = 1., 
-                            n_samples = 1000):
-    
-    """
-    Calculates the quantile for a given probability using KDE.
-
-    Parameters:
-    _KDE: Kernel density estimate object (e.g., from scipy.stats.gaussian_kde).
-    q:    Probability value (between 0 and 1) for which to calculate the quantile.
-
-    Returns:
-    The quantile value.
-    """
-
-    # Calculate CDF
-    x_ = np.linspace(x_min, x_max, n_samples)
-    #z_ = np.exp(_KDE.score_samples(x_[:, np.newaxis]))
-    w_ = np.cumsum(np.exp(_KDE.score_samples(x_[:, np.newaxis])))
-    # Normalize CDF
-    w_ /= w_[-1] 
-    
-    return np.interp(np.array(q_), w_, x_), np.interp(1. - np.array(q_), w_, x_)
-
-# Silverman's Rule
-def _silverman_rule(x_):
-    IQR = np.percentile(x_, 75) - np.percentile(x_, 25)
-    return 0.9 * min(np.std(x_), IQR / 1.34) * x_.shape[0] ** (-1/5)
-
-# Circular distance to rank samples by day of the year
-def _circular_dist(x_1_, x_2_, 
-                   day_to_degree = 360/365, 
-                   degree_to_rad = np.pi/180):
-    return np.sin(.5*(day_to_degree * (x_2_ - x_1_) * degree_to_rad))**2
-
-
-# Filtering scenarios when are above the upper threshold or below lower threshold
-def _scenario_filtering(W_, d_s_, d_t_, xi, gamma, kappa_min, kappa_max):
-    
-    status = 0
-    s      = 0
-
-    # Similarity ranking
-    idx_rank_ = np.argmin(W_, axis = 0)
-    
-    # Similarity filter
-    w_        = np.min(W_, axis = 0)
-    idx_bool_ = w_ >= xi
-    #print(kappa_min, idx_bool_.sum(), kappa_max)
-    
-    # Index from selected scenarios
-    idx_1_ = np.arange(w_.shape[0])[idx_bool_]
-    
-    # Filter by temporal distance
-    if idx_bool_.sum() > kappa_max:
-        idx_bool_p_ = idx_bool_ & (d_t_ <= gamma)
-        #print('(1) Filtering by date: ')
-        #print(idx_bool_p_.sum())
-
-        if idx_bool_p_.sum() > kappa_min:
-            status    = 1
-            idx_bool_ = idx_bool_p_.copy()
-        else:
-            gamma = 0
-            #print(' Bypass filtering by date: ')
-            #print(idx_bool_.sum())
-
-    # Filter by spatial distance
-    if idx_bool_.sum() > kappa_max:
-        status    = 2
-        s         = np.sort(d_s_[idx_bool_])[kappa_max]
-        idx_bool_ = idx_bool_ & (d_s_ <= s)
-        #print('(2) Filtering by distance: ')
-        #print(idx_bool_.sum())
-
-    if idx_bool_.sum() < kappa_min:
-        status    = 2
-        iota      = 0
-        xi        = np.sort(w_)[::-1][kappa_min]
-        idx_bool_ = w_ >= xi
-        #print('Increasing similarity threshold: ')
-        #print(idx_bool_.sum())
-    
-    idx_2_ = np.arange(w_.shape[0])[idx_bool_]
-
-    return w_, idx_rank_, idx_bool_, idx_1_, idx_2_, xi, gamma, s, status
 
 def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
                                   forget_rate_f  = 1.,
@@ -182,11 +42,11 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
                                   length_scale_f = .1,
                                   length_scale_e = .75,
                                   lookup_rate    = .05,
-                                  trust_rate     = .005,
+                                  trust_rate     = 0.0175,
                                   gamma          = .2,
                                   xi             = 0.99,
                                   kappa_min      = 100,
-                                  kappa_max      = 250):
+                                  kappa_max      = 1000):
 
 
     # Get constants
@@ -199,14 +59,14 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
 
     # psi: importance weights based on past and future time distance
     psi_1_ = _exponential_growth(t, forget_rate_e)
-    psi_2_ = _exponential_decay(t, lookup_rate)
+    psi_2_ = _exponential_decay(T - t, lookup_rate)
     psi_   = np.concatenate([psi_1_, psi_2_], axis = 0)
-    
-    # d: euclidian distance between samples weighted by importance weights
-    d_f_ = _dist(F_tr_[:, :t], f_, w_ = phi_)
-    d_e_ = _dist(E_tr_, e_, w_ = psi_)
-    d_s_ = _haversine_dist(x_ts_[a, :], x_tr_)
-    d_t_ = _circular_dist(t_tr_[d], t_tr_)
+
+    # d: Euclidean distance between samples weighted by importance weights
+    d_f_ = _euclidian_dist(F_tr_[:, :t], f_, w_ = phi_)
+    d_e_ = _euclidian_dist(E_tr_, e_, w_ = psi_)
+    d_h_ = _haversine_dist(x_ts_[a, :], x_tr_)
+    d_p_ = _periodic_dist(t_tr_[d], t_tr_)
     # print(x_tr_.shape, x_ts_.shape, d_s_.shape)
     # print(t_tr_.shape, t_ts_.shape, d_t_.shape)
 
@@ -215,21 +75,24 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
     w_e_ = _kernel(d_e_, length_scale_e)
     W_   = np.stack([w_f_, w_e_])
 
-    w_, idx_rank_, idx_bool_, idx_1_, idx_2_, xi, gamma, s, status = _scenario_filtering(W_, 
-                                                                                         d_s_, 
-                                                                                         d_t_, 
-                                                                                         xi, 
-                                                                                         gamma, 
-                                                                                         kappa_min, 
-                                                                                         kappa_max)
+    (w_, 
+    idx_rank_, 
+    idx_bool_, 
+    idx_1_, 
+    idx_2_, 
+    idx_3_, 
+    xi, 
+    gamma, 
+    sigma, 
+    status) = _scenario_filtering(W_, 
+                                  d_h_, 
+                                  d_p_, 
+                                  xi, 
+                                  gamma, 
+                                  kappa_min, 
+                                  kappa_max)
 
-    # eta: importance weights based on future time distance
-    rmse  = np.sqrt(np.mean((e_[:t] - f_)**2))
-    wrmse = np.sqrt(np.sum(psi_1_*(e_[:t] - f_)**2)/psi_1_.sum())
-    nu    = np.sqrt(rmse)*2750
-    if nu < 875: nu = 875
-    #print(rmse, wrmse)
-
+    nu   = t*5 + 340
     eta_ = _logistic(s_ - nu, k = trust_rate)
 
     # Fuse scenarios with day-ahead forecasts
@@ -239,8 +102,37 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
 
     return M_, phi_, psi_, eta_
 
+# Get MPI node information
+def _get_node_info(verbose = False):
+    comm = MPI.COMM_WORLD
+    size = comm.Get_size()
+    rank = comm.Get_rank()
+    name = MPI.Get_processor_name()
+    if verbose:
+        print('>> MPI: Name: {} Rank: {} Size: {}'.format(name, rank, size) )
+    return int(rank), int(size), comm
+
+
+# MPI job variables
+#i_job, N_jobs, _comm = _get_node_info()
+
 # Timestamps in interval
 T = 288
+
+a = 2
+d = 7
+t = 12*12
+
+# forget_rate_f_ 
+# forget_rate_e_
+# lookup_rate_ 
+# trust_rate_ 
+# length_scale_f_     
+# length_scale_e_ 
+# xi_   
+# gamma_
+
+alpha_ = [0.1, 0.2, 0.4]
 
 
 # Loading and processing of sites metadata
@@ -294,17 +186,11 @@ t_ts_ = np.array([datetime.datetime.strptime(t_ts, '%Y-%m-%d').timetuple().tm_yd
 t_tr_ = np.array([datetime.datetime.strptime(t_tr, '%Y-%m-%d').timetuple().tm_yday for t_tr in T_tr_]) - 1
 print(t_tr_.shape, t_ts_.shape)
 
-
-
-a = 2
-d = 7
-t = 12*12
-
 t1 = datetime.datetime.now()
-for d in range(363):
+for d in range(365):
 
     file_name = f'{a}-{d}-{t}'
-    #print(file_name)
+    print(file_name)
 
     f_     = F_ts_[d, :t, a]
     e_     = E_ts_[d, :, a]
@@ -323,18 +209,26 @@ for d in range(363):
                                                          lookup_rate    = .05,
                                                          trust_rate     = .005,
                                                          xi             = 0.99,
-                                                         gamma          = .2)
+                                                         gamma          = _periodic_dist(t_tr_[d], 90),
+                                                         kappa_min      = 100,
+                                                         kappa_max      = 1000)
+    
+    # Calculate confidence intervals from Directional Quantiles
+    m_, _upper, _lower = _confidence_intervals_from_DQ(M_, alpha_, path_to_fDepth)
+    WIS_ = _weighted_interval_score(f_hat_, m_, _upper, _lower, alpha_)
+    print(WIS_.mean())
+
+    x
+
+    # Calculate confidence intervals from functional depth metrics
+    # m_, _upper, _lower = _confidence_intervals_from_fDepth(M_, alpha_, 'MBD', path_to_fDepth)
+    # WIS_ = _weighted_interval_score(f_hat_, m_, _upper, _lower, alpha_)
+    # print(WIS_.mean())
+
+    # Calculate confidence intervals from functional depth metrics
+    m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_)
+    WIS_ = _weighted_interval_score(f_hat_, m_, _upper, _lower, alpha_)
+    print(WIS_.mean())
 
 t2 = datetime.datetime.now()
 print(t2 - t1)
-
-# forget_rate_f_ = []
-# forget_rate_e_ = []
-# lookup_rate_   = []
-# trust_rate_    = []
-
-# length_scale_f_ = []      
-# length_scale_e_ = []
-
-# xi_    = []
-# gamma_ = []
