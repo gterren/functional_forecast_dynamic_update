@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import pickle as pkl
 import scipy.stats as stats
-import properscoring as ps
 
 from scipy.integrate import quad
 from scipy import interpolate
@@ -199,6 +198,94 @@ def _ks(y_true, forecast_mean, forecast_std, nbins = 100):
     
     return ks
 
+def _empirical_coverage_score(y_true, _lower, _upper, alpha_):
+    """`
+    Calculate the coverage score for probabilistic forecasts with an interval [lower, upper]
+    
+    Parameters:
+    - y_: Observed (true) values
+    - lower_: upper confidence bound
+    - upper_: lower confidence dound
+    
+    Returns:
+    - coverage_score: The calculated interval score
+    """
+
+    def _converage_score(y_true, lower_, upper_):
+        coverage = 0
+        for i in range(y_true.shape[0]): 
+            if (y_true[i] < lower_[i]) or (y_true[i] > upper_[i]):
+                coverage += 0
+            else:
+                coverage += 1
+        return coverage / y_true.shape[0]
+
+
+    cs_ = np.zeros((len(alpha_),))
+    for i in range(len(alpha_)):
+        cs_[i] = _converage_score(y_true, _lower[f'{alpha_[i]}'], _upper[f'{alpha_[i]}'])
+    
+    return cs_
+
+
+def _empirical_interval_score(y_true, y_pred_lower, y_pred_upper, alpha):
+    """
+    Calculate the interval score for probabilistic forecasts with an interval [lower, upper].
+    
+    Parameters:
+    - y_true: Observed (true) values
+    - y_pred_upper: upper confidence interval for significance level alpha
+    - y_pred_lower: low confidence interval for significance level alpha
+    - alpha: Significance level (default 0.05 for 90% confidence interval)
+    
+    Returns:
+    - interval_score: The calculated interval score
+    """
+        
+    # Penalty for observation outside the lower bound
+    penalty_lower = 2.*np.maximum(0, y_pred_lower - y_true)/alpha
+    
+    # Penalty for observation outside the upper bound
+    penalty_upper = 2.*np.maximum(0, y_true - y_pred_upper)/alpha
+    
+    # Interval width penalty
+    penalty_width = y_pred_upper - y_pred_lower
+    
+    # Total interval score
+    return penalty_lower + penalty_upper + penalty_width
+
+def _weighted_empirical_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_upper, alpha_):
+    """
+    Calculate the interval score for probabilistic forecasts with an interval [lower, upper].
+    
+    Parameters:
+    - y_true: Observed (true) values
+    - _y_pred_lower: dictionary with upper confidence interval for all significance levels alpha
+    - _y_pred_lower: dictionary with lower confidence interval for all significance levels alpha
+    - alpha: all significance level alpha (default 0.05 for 90% confidence interval)
+
+    Returns:
+    - WIS: float, the Weighted Interval Score.
+    """
+
+    # Calculate the interval score
+    w0  = 1/2.
+    w_  = np.array(alpha_)/2.
+    is_ = np.zeros((y_true.shape[0], w_.shape[0]))
+    for i in range(len(alpha_)):
+        is_[:, i] = _empirical_interval_score(y_true, 
+                                              _y_pred_lower[f'{alpha_[i]}'], 
+                                              _y_pred_upper[f'{alpha_[i]}'],
+                                              alpha_[i])
+    
+    term0 = 1./(len(alpha_) + 1/2.)
+    term1 = w0 * np.absolute(y_true - y_pred)
+
+    for i in range(w_.shape[0]):
+        is_[:, i] = w_[i] * is_[:, i]
+    term2 = np.sum(is_, axis = 1)
+        
+    return term1 * (term1 + term2)
 
 def _ignorance_scores(f_ts_, f_ts_hat_, s_ts_hat_):
          

@@ -1,4 +1,4 @@
-import os, glob, datetime
+import os, glob, datetime, sys
 
 import pandas as pd
 import numpy as np
@@ -7,7 +7,8 @@ import scipy.stats as stats
 
 from scipy.integrate import quad
 from scipy.stats import multivariate_normal, norm
-from functional_utils import _fDepth, _fDepth4POD
+from itertools import product
+
 from sklearn.neighbors import KernelDensity
 from statsmodels.distributions.empirical_distribution import ECDF
 from mpi4py import MPI
@@ -19,22 +20,26 @@ from loading_utils import (_process_metadata,
                            _process_testing_forecasts)
 
 from ffc_utils import (_euclidian_dist, 
-                           _periodic_dist, 
-                           _haversine_dist,
-                           _kernel,
-                           _logistic, 
-                           _scenario_filtering, 
-                           _exponential_growth, 
-                           _exponential_decay, 
-                           _silverman_rule, 
-                           _weighted_interval_score, 
-                           _confidence_intervals_from_eCDF, 
-                           _confidence_intervals_from_fDepth, 
-                           _confidence_intervals_from_DQ)
+                       _periodic_dist, 
+                       _haversine_dist,
+                       _rbf_kernel,
+                       _logistic, 
+                       _scenario_filtering, 
+                       _exponential_growth, 
+                       _exponential_decay,
+                       _silverman_rule)
 
+from functional_utils import (_confidence_intervals_from_eCDF,
+                              _confidence_intervals_from_MBD, 
+                              _confidence_intervals_from_DQ)
 
-path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
-path_to_data   = '/home/gterren/dynamic_update/data'
+from scores_utils import (_empirical_interval_score,
+                          _empirical_coverage_score,
+                          _weighted_empirical_interval_score)
+
+path_to_fDepth     = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
+path_to_data       = '/home/gterren/dynamic_update/data'
+path_to_validation = '/home/gterren/dynamic_update/validation'
 
 def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
                                   forget_rate_f  = 1.,
@@ -43,6 +48,7 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
                                   length_scale_e = .75,
                                   lookup_rate    = .05,
                                   trust_rate     = 0.0175,
+                                  nu             = 340,
                                   gamma          = .2,
                                   xi             = 0.99,
                                   kappa_min      = 100,
@@ -71,8 +77,8 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
     # print(t_tr_.shape, t_ts_.shape, d_t_.shape)
 
     # w: normalized weights distance across observations based exponential link function
-    w_f_ = _kernel(d_f_, length_scale_f)
-    w_e_ = _kernel(d_e_, length_scale_e)
+    w_f_ = _rbf_kernel(d_f_, length_scale_f)
+    w_e_ = _rbf_kernel(d_e_, length_scale_e)
     W_   = np.stack([w_f_, w_e_])
 
     (w_, 
@@ -92,15 +98,27 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_,
                                   kappa_min, 
                                   kappa_max)
 
-    nu   = t*5 + 340
+    nu   = t*5 + nu
     eta_ = _logistic(s_ - nu, k = trust_rate)
 
     # Fuse scenarios with day-ahead forecasts
-    M_ = np.zeros((idx_2_.shape[0], eta_.shape[0]))
-    for i, j in zip(idx_2_, range(idx_2_.shape[0])):
+    M_ = np.zeros((idx_3_.shape[0], eta_.shape[0]))
+    for i, j in zip(idx_3_, range(idx_3_.shape[0])):
         M_[j, :] = F_tr_[i, t:]*(1. - eta_) + E_tr_[i, t:]*eta_
 
-    return M_, phi_, psi_, eta_
+    return M_, phi_, psi_, eta_, status
+
+def _save_validaiton_csv(df_new_, path_to_file):
+
+    # Check if the CSV exists
+    if os.path.exists(path_to_file):
+        # Read existing data
+        df_existing_ = pd.read_csv(path_to_file)
+        df_new_      = pd.concat([df_existing_, df_new_], ignore_index = True).reset_index(drop = True)
+
+    # Overwrite the CSV with the updated data
+    df_new_.to_csv(path_to_file, index = False)
+    print(df_new_.shape)
 
 # Get MPI node information
 def _get_node_info(verbose = False):
@@ -112,28 +130,11 @@ def _get_node_info(verbose = False):
         print('>> MPI: Name: {} Rank: {} Size: {}'.format(name, rank, size) )
     return int(rank), int(size), comm
 
-
 # MPI job variables
-#i_job, N_jobs, _comm = _get_node_info()
+i_job, N_jobs, _comm = _get_node_info()
 
 # Timestamps in interval
 T = 288
-
-a = 2
-d = 7
-t = 12*12
-
-# forget_rate_f_ 
-# forget_rate_e_
-# lookup_rate_ 
-# trust_rate_ 
-# length_scale_f_     
-# length_scale_e_ 
-# xi_   
-# gamma_
-
-alpha_ = [0.1, 0.2, 0.4]
-
 
 # Loading and processing of sites metadata
 meta_ = _process_metadata(file_name = '/wind_meta.xlsx', 
@@ -186,49 +187,167 @@ t_ts_ = np.array([datetime.datetime.strptime(t_ts, '%Y-%m-%d').timetuple().tm_yd
 t_tr_ = np.array([datetime.datetime.strptime(t_tr, '%Y-%m-%d').timetuple().tm_yday for t_tr in T_tr_]) - 1
 print(t_tr_.shape, t_ts_.shape)
 
-t1 = datetime.datetime.now()
-for d in range(365):
+# Calibration experiments setup
+#times_  = [12*12]
+times_  = [int(sys.argv[2])]
+assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+alpha_  = [0.1, 0.2, 0.4]
 
-    file_name = f'{a}-{d}-{t}'
-    print(file_name)
+# Hyperparameters for the functional forecast dynamic update
+forget_rate_f_  = [.1]
+forget_rate_e_  = [.1]
+lookup_rate_    = [.1]
+trust_rate_     = [.1]
+length_scale_f_ = [.1]   
+length_scale_e_ = [.1]
+nu_             = [375]
+gamma_          = [180]
+xi_             = [0.9]
+zeta_           = [1.]
+kappa_min_      = [200]
+kappa_max_      = [1000]
 
-    f_     = F_ts_[d, :t, a]
-    e_     = E_ts_[d, :, a]
-    x_     = x_ts_[a, :]
-    f_hat_ = F_ts_[d, t:, a]
+if sys.argv[1] == 'forget_rate_f':
+    forget_rate_f_ = np.geomspace(0.001, 2., 13).tolist()
 
-    # Get constants
-    tau_ = dt_[:t]
-    s_   = dt_[t:]
+if sys.argv[1] == 'forget_rate_e':
+    forget_rate_e_ = np.geomspace(0.001, 2., 13).tolist()
 
-    M_, phi_, psi_, eta_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_, 
-                                                         forget_rate_f  = 1.,
-                                                         forget_rate_e  = .5,
-                                                         length_scale_f = .1,
-                                                         length_scale_e = .75,
-                                                         lookup_rate    = .05,
-                                                         trust_rate     = .005,
-                                                         xi             = 0.99,
-                                                         gamma          = _periodic_dist(t_tr_[d], 90),
-                                                         kappa_min      = 100,
-                                                         kappa_max      = 1000)
-    
-    # Calculate confidence intervals from Directional Quantiles
-    m_, _upper, _lower = _confidence_intervals_from_DQ(M_, alpha_, path_to_fDepth)
-    WIS_ = _weighted_interval_score(f_hat_, m_, _upper, _lower, alpha_)
-    print(WIS_.mean())
+if sys.argv[1] == 'length_scale_f':
+    length_scale_f_ = np.geomspace(0.01, 2., 13).tolist()
 
-    x
+if sys.argv[1] == 'length_scale_e':
+    length_scale_e_ = np.geomspace(0.01, 2., 13).tolist()
 
-    # Calculate confidence intervals from functional depth metrics
-    # m_, _upper, _lower = _confidence_intervals_from_fDepth(M_, alpha_, 'MBD', path_to_fDepth)
-    # WIS_ = _weighted_interval_score(f_hat_, m_, _upper, _lower, alpha_)
-    # print(WIS_.mean())
+if sys.argv[1] == 'lookup_rate':
+    lookup_rate_ = np.geomspace(0.001, 2., 13).tolist()
 
-    # Calculate confidence intervals from functional depth metrics
-    m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_)
-    WIS_ = _weighted_interval_score(f_hat_, m_, _upper, _lower, alpha_)
-    print(WIS_.mean())
+if sys.argv[1] == 'trust_rate':
+    trust_rate_ = np.geomspace(0.001, 2., 13).tolist()
 
-t2 = datetime.datetime.now()
-print(t2 - t1)
+if sys.argv[1] == 'nu':
+    nu_ = np.linspace(0, 750., 13).tolist()
+
+if sys.argv[1] == 'gamma':
+    gamma_ = np.linspace(15, 365, 13, dtype = int).tolist()
+
+if sys.argv[1] == 'xi':
+    xi_ = np.logspace(-.1, -0.0001, 13).tolist()
+
+if sys.argv[1] == 'kappa_min':
+    kappa_min_ = np.linspace(50, 500, 13, dtype = int).tolist()
+
+if sys.argv[1] == 'kappa_max':
+    kappa_max_ = np.linspace(500, 2000, 13, dtype = int).tolist()
+
+params_ = tuple(product(forget_rate_f_, 
+                        forget_rate_e_, 
+                        length_scale_f_,
+                        length_scale_e_,
+                        lookup_rate_, 
+                        trust_rate_, 
+                        nu_,
+                        gamma_,
+                        xi_, 
+                        kappa_min_, 
+                        kappa_max_))[i_job]
+
+dfs_1_ = []
+dfs_2_ = []
+for t in times_:
+    for a in assets_:
+        for d in range(365):
+            t1 = datetime.datetime.now()
+
+            file_name = f'{a}-{d}-{t}'
+            print(file_name)
+
+            f_     = F_ts_[d, :t, a]
+            e_     = E_ts_[d, :, a]
+            x_     = x_ts_[a, :]
+            f_hat_ = F_ts_[d, t:, a]
+
+            # Get time constants
+            tau_ = dt_[:t]
+            s_   = dt_[t:]
+
+            M_, phi_, psi_, eta_, status = _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, dt_, f_, e_, x_, f_hat_, 
+                                                                         forget_rate_f  = params_[0],
+                                                                         forget_rate_e  = params_[1],
+                                                                         length_scale_f = params_[2],
+                                                                         length_scale_e = params_[3],
+                                                                         lookup_rate    = params_[4],
+                                                                         trust_rate     = params_[5],
+                                                                         nu             = params_[6],
+                                                                         gamma          = _periodic_dist(t_tr_[d], params_[7]),
+                                                                         xi             = params_[8],
+                                                                         kappa_min      = params_[9],
+                                                                         kappa_max      = params_[10])
+
+            # # Calculate confidence intervals from Directional Quantiles
+            # m_, _upper, _lower = _confidence_intervals_from_DQ(M_, alpha_, params_[8])
+            # WIS_DQ_            = _weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_)
+            # CS_DQ_             = _empirical_coverage_score(f_hat_, _lower, _upper, alpha_)
+
+            # # Calculate confidence intervals from Modified Band Depth
+            # m_, _upper, _lower = _confidence_intervals_from_MBD(M_, alpha_, params_[8])
+            # WIS_MBD_           = _weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_)
+            # CS_MBD_            = _empirical_coverage_score(f_hat_, _lower, _upper, alpha_)
+
+            # Calculate marginal empirical confidence intervals
+            m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_, 1)
+            WIS_eCDF_          = _weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_)
+            CS_eCDF_           = _empirical_coverage_score(f_hat_, _lower, _upper, alpha_)
+
+            # Save results
+            x_ = list(params_ + tuple([t, a, d, M_.shape[0], status, float(WIS_eCDF_.mean())]))
+            dfs_1_.append(x_)
+
+            y_ = list(params_ + tuple([t, a, d, M_.shape[0], status]) + tuple(CS_eCDF_))
+            dfs_2_.append(y_)
+
+            t2 = datetime.datetime.now()
+            print(t2 - t1)
+
+dfs_1_ = pd.DataFrame(dfs_1_, columns = ['forget_rate_f', 
+                                         'forget_rate_e', 
+                                         'length_scale_f',
+                                         'length_scale_e', 
+                                         'lookup_rate', 
+                                         'trust_rate',
+                                         'nu', 
+                                         'gamma', 
+                                         'xi',
+                                         'kappa_min', 
+                                         'kappa_max',
+                                         'time', 
+                                         'asset', 
+                                         'day', 
+                                         'n_scenarios', 
+                                         'status',
+                                         'WIS_eCDF'])
+print(dfs_1_.shape)
+
+_save_validaiton_csv(dfs_1_, path_to_file = f'{path_to_validation}/ffc_validation-WIS-{sys.argv[1]}.csv')
+
+dfs_2_ = pd.DataFrame(dfs_2_, columns = ['forget_rate_f', 
+                                         'forget_rate_e', 
+                                         'length_scale_f',
+                                         'length_scale_e', 
+                                         'lookup_rate', 
+                                         'trust_rate',
+                                         'nu', 
+                                         'gamma', 
+                                         'xi',
+                                         'kappa_min', 
+                                         'kappa_max',
+                                         'time', 
+                                         'asset', 
+                                         'day', 
+                                         'n_scenarios', 
+                                         'status',
+                                         'CS_eCDF_90', 
+                                         'CS_eCDF_80', 
+                                         'CS_eCDF_60'])
+print(dfs_2_.shape)
+_save_validaiton_csv(dfs_2_, path_to_file = f'{path_to_validation}/ffc_validation-CS-{sys.argv[1]}.csv')

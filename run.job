@@ -1,0 +1,18 @@
+#!/bin/bash -l
+#SBATCH --job-name=forecast_dynamic_update
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=16
+#SBATCH --time=24:00:00
+#SBATCH -p batch
+##SBATCH --mem=187G
+##SBATCH --output=res.txt
+##SBATCH --mail-type=BEGIN,END
+##SBATCH --mail-user=guillermoterren@ucsb.edu
+#SBATCH --output=%x.%j.out
+
+cd /home/gterren/dynamic_update/functional_forecast_dynamic_update
+source activate du
+
+time mpirun -np 13 python ffc.py $1 $2
+#python ffc.py $1
+
