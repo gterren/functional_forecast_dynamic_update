@@ -5,7 +5,6 @@ import numpy as np
 import pickle as pkl
 
 from statsmodels.distributions.empirical_distribution import ECDF
-from numba import njit, prange
 
 path_to_fPCA   = '/Users/Guille/Desktop/dynamic_update/software/fPCA'
 path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth'
@@ -170,67 +169,64 @@ def _directional_quantile(curves, q_lower=0.025, q_upper=0.975):
 
     return np.max(scaled, axis=1)
 
+def _modified_band_depth(curves):
+    """
+    Compute Modified Band Depth (J=2) using vectorized NumPy operations.
+    
+    Parameters:
+    -----------
+    curves: ndarray, shape (n_samples, n_times)
+        Functional data matrix.
+    
+    Returns:
+    --------
+    mbd: ndarray, shape (n_samples,)
+        MBD scores for each function.
+    """
+    n, T  = curves.shape
+    pairs = np.array([(j, k) for j in range(n) for k in range(j+1, n)])
+    lower = np.minimum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
+    upper = np.maximum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
+    mbd   = np.zeros(n)
+    
+    # Check inclusion across all bands and time points
+    for i in range(n):
+        inside = np.logical_and(lower <= curves[i], curves[i] <= upper)
+        mbd[i] = inside.sum() / (len(pairs) * T)
+    
+    return mbd
+
+
 # @njit
 # def _modified_band_depth(curves):
 #     """
-#     Compute Modified Band Depth (J=2) using vectorized NumPy operations.
+#     Fast MBD computation for all curves in the dataset.
     
 #     Parameters:
-#     -----------
-#     curves: ndarray, shape (n_samples, n_times)
-#         Functional data matrix.
+#     - data: numpy array of shape (n_curves, n_timepoints)
     
 #     Returns:
-#     --------
-#     mbd: ndarray, shape (n_samples,)
-#         MBD scores for each function.
+#     - mbd: numpy array of MBD values for each curve (length n_curves)
 #     """
-#     n, T  = curves.shape
-#     pairs = np.array([(j, k) for j in range(n) for k in range(j+1, n)])
-#     lower = np.minimum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
-#     upper = np.maximum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
-#     mbd   = np.zeros(n)
-    
-#     # Check inclusion across all bands and time points
-#     for i in range(n):
-#         inside = np.logical_and(lower <= curves[i], curves[i] <= upper)
-#         mbd[i] = inside.sum() / (len(pairs) * T)
-    
+#     n, m = curves.shape
+#     mbd = np.zeros(n)
+#     total_pairs = n * (n - 1) / 2.0
+
+#     for k in range(n):  # Parallel loop over curves
+#         depth = 0.0
+#         for i in range(n):
+#             for j in range(i + 1, n):
+#                 # Compute pointwise band between curve i and j
+#                 band_min = np.minimum(curves[i], curves[j])
+#                 band_max = np.maximum(curves[i], curves[j])
+#                 # Count how often curve k is within the band
+#                 count = 0
+#                 for t in range(m):
+#                     if band_min[t] <= curves[k][t] <= band_max[t]:
+#                         count += 1
+#                 depth += count / m
+#         mbd[k] = depth / total_pairs
 #     return mbd
-
-import numpy as np
-from numba import njit, prange
-
-@njit
-def _modified_band_depth(curves):
-    """
-    Fast MBD computation for all curves in the dataset.
-    
-    Parameters:
-    - data: numpy array of shape (n_curves, n_timepoints)
-    
-    Returns:
-    - mbd: numpy array of MBD values for each curve (length n_curves)
-    """
-    n, m = curves.shape
-    mbd = np.zeros(n)
-    total_pairs = n * (n - 1) / 2.0
-
-    for k in range(n):  # Parallel loop over curves
-        depth = 0.0
-        for i in range(n):
-            for j in range(i + 1, n):
-                # Compute pointwise band between curve i and j
-                band_min = np.minimum(curves[i], curves[j])
-                band_max = np.maximum(curves[i], curves[j])
-                # Count how often curve k is within the band
-                count = 0
-                for t in range(m):
-                    if band_min[t] <= curves[k][t] <= band_max[t]:
-                        count += 1
-                depth += count / m
-        mbd[k] = depth / total_pairs
-    return mbd
 
 
 def _eQuantile(_eCDF, q_):
@@ -249,19 +245,19 @@ def _eQuantile(_eCDF, q_):
     return np.array([_eCDF.x[np.searchsorted(_eCDF.y, q)] for q in q_])
 
 # Derive confidence intervals from Directional Quantiles
-def _confidence_intervals_from_DQ(M_, alpha_, zeta = 1.):
+def _confidence_intervals_from_DQ(M_, alpha_, zeta_):
     
     _y_pred_upper = {}
     _y_pred_lower = {}
+
+    # Calculate functional Directional Quantiles (DQ)
+    DQ_ = _directional_quantile(M_)
+    
     for i in range(len(alpha_)):
-        # Calculate functional Directional Quantiles (DQ)
-        DQ_ = _directional_quantile(M_, 
-                                    q_lower = alpha_[i]/2., 
-                                    q_upper = 1. - alpha_[i]/2.)
 
         I_  = np.argsort(np.absolute(DQ_))[::-1]
 
-        scen_                         = M_[I_[int(M_.shape[0] * zeta * alpha_[i]):],]
+        scen_                         = M_[I_[int(M_.shape[0] * zeta_[i]):],]
         _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
         _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
 
@@ -270,7 +266,7 @@ def _confidence_intervals_from_DQ(M_, alpha_, zeta = 1.):
     return m_, _y_pred_upper, _y_pred_lower
 
 # Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_MBD(M_, alpha_, zeta = 1.):
+def _confidence_intervals_from_MBD(M_, alpha_, zeta_):
 
     # Calculate Modified Band Depth ranking
     MBD_ = _modified_band_depth(M_)
@@ -278,7 +274,7 @@ def _confidence_intervals_from_MBD(M_, alpha_, zeta = 1.):
     _y_pred_upper = {}
     _y_pred_lower = {}
     for i in range(len(alpha_)):
-        scen_                         =  M_[I_[int(M_.shape[0] * zeta * alpha_[i]):],]
+        scen_                         =  M_[I_[int(M_.shape[0] * zeta_[i]):],]
         _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
         _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
 
@@ -287,15 +283,15 @@ def _confidence_intervals_from_MBD(M_, alpha_, zeta = 1.):
     return m_, _y_pred_upper, _y_pred_lower
 
 # Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_eCDF(M_, alpha_, zeta = 1.):    
+def _confidence_intervals_from_eCDF(M_, alpha_, zeta_):    
 
     _y_pred_upper = {}
     _y_pred_lower = {}
     for i in range(len(alpha_)):
 
-        _y_pred_lower[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [zeta*alpha_[i]/2.])
+        _y_pred_lower[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [zeta_[i]/2.])
                                                   for j in range(M_.shape[1])])[:, 0]
-        _y_pred_upper[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - (zeta*alpha_[i]/2.)])
+        _y_pred_upper[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - (zeta_[i]/2.)])
                                                   for j in range(M_.shape[1])])[:, 0]
 
     m_ = np.median(M_, axis = 0)

@@ -3,9 +3,7 @@ import os, glob, datetime
 import pandas as pd
 import numpy as np
 import pickle as pkl
-import scipy.stats as stats
 
-from scipy.stats import multivariate_normal, norm
 from functional_utils import _fDepth, _fQuantile
 from sklearn.neighbors import KernelDensity
 from statsmodels.distributions.empirical_distribution import ECDF
@@ -25,15 +23,33 @@ def _rbf_kernel(d_, length_scale):
     w_ = np.exp(-d_ / length_scale)
     return w_  # /w_.sum()
 
+# # Define exponential growth function
+# def _exponential_growth(t, growth_rate):
+#     tau_ = np.linspace(t - 1, 0, t)
+#     return np.exp(-growth_rate*tau_)
+
+# # Define exponential dacay function
+# def _exponential_decay(S, decay_rate):
+#     s_ = np.linspace(0, S - 1, S)
+#     return np.exp(-decay_rate*s_)
+
+# def _logistic(x_, k = 1.):
+#     return 1. / (1. + np.exp( - k*x_))
+
 # Define exponential growth function
-def _exponential_growth(t, dacay_rate, innit = 0):
+def _exponential_growth(t, growth_rate):
     tau_ = np.linspace(t - 1, 0, t)
-    return np.exp(-dacay_rate*tau_)
+    phi_ = np.exp(np.log(0.5)*(tau_ - 1)/(growth_rate*12))
+    return phi_
 
 # Define exponential dacay function
-def _exponential_decay(S, dacay_rate):
-    s_ = np.linspace(0, S - 1, S)
-    return np.exp(-dacay_rate*s_)
+def _exponential_decay(S, decay_rate):
+    s_   = np.linspace(0, S - 1, S)
+    psi_ = np.exp(np.log(0.5)*(s_ - 1)/(decay_rate*12))
+    return psi_    
+
+def _logistic(x_, k):
+    return 1. - 1.0 / (1.0 + np.exp(np.log(999) * x_ / (k*60/2)))
 
 def _haversine_dist(x_1_, x_2_):
     """
@@ -54,9 +70,6 @@ def _haversine_dist(x_1_, x_2_):
     theta = np.sin(dlat_/2)**2 + np.cos(np.deg2rad(x_1_[1]))*np.cos(np.deg2rad(x_2_[:, 1]))*np.sin(dlon_/2)**2
     
     return 2.*R*np.arcsin(np.sqrt(theta))
-
-def _logistic(x_, k = 1.):
-    return 1. / (1. + np.exp( - k*x_))
 
 # Define a function to calculate quantiles
 def _KDE_quantile(_KDE, q_, x_min     = 0., 
@@ -94,6 +107,11 @@ def _periodic_dist(x_1_, x_2_, day_to_degree=360/365, degree_to_rad=np.pi / 180)
 
 # Filtering scenarios when they are above the upper threshold or below the lower threshold
 def _scenario_filtering(W_, d_h_, d_p_, xi, gamma, kappa_min, kappa_max):
+    # status = 0 no filtering
+    # status = 1 spatial filtering 
+    # status = 2 temporal filtering 
+    # status = 3 temporal + spatial filtering 
+    # status = 4 increasing xi threshold
 
     status = 0
     sigma  = 0
@@ -104,41 +122,37 @@ def _scenario_filtering(W_, d_h_, d_p_, xi, gamma, kappa_min, kappa_max):
     # Similarity filter
     w_ = np.min(W_, axis=0)
     idx_bool_ = w_ >= xi
-    print(kappa_min, idx_bool_.sum(), kappa_max)
+    #print(kappa_min, idx_bool_.sum(), kappa_max)
 
     # Index from selected scenarios
     idx_1_ = np.arange(w_.shape[0])[idx_bool_]
-    # Filter by temporal distance
-    if idx_bool_.sum() > kappa_max:
-        print("(1) Filtering by date: ")
-        idx_bool_p_ = idx_bool_ & (d_p_ <= gamma)
-        print(idx_bool_p_.sum())
-
-        if idx_bool_p_.sum() > kappa_min:
-            status    = 1
-            idx_bool_ = idx_bool_p_.copy()
-        else:
-            print(" Bypass filtering by date: ")
-            gamma = 0
-            print(idx_bool_.sum())
-
-    idx_2_ = np.arange(w_.shape[0])[idx_bool_]
-
-    # Filter by spatial distance
-    if idx_bool_.sum() > kappa_max:
-        print("(2) Filtering by distance: ")
-        status    = 2
-        sigma     = np.sort(d_h_[idx_bool_])[kappa_max]
-        idx_bool_ = idx_bool_ & (d_h_ <= sigma)
-        print(idx_bool_.sum())
 
     if idx_bool_.sum() < kappa_min:
-        print("Increasing similarity threshold: ")
-        status    = 2
+        #print("Increasing similarity threshold: ")
+        status    = 4
         gamma     = 0
         xi        = np.sort(w_)[::-1][kappa_min]
         idx_bool_ = w_ >= xi
-        print(idx_bool_.sum())
+        #print(idx_bool_.sum())
+
+    # Filter by temporal distance
+    if idx_bool_.sum() > kappa_max:
+        #print("(1) Filtering by date: ")
+        idx_bool_p_ = idx_bool_ & (d_p_ <= gamma)
+
+        # If temporal distance filtering worked (status = 1) if not move on to distance filtering (status = 3)
+        if idx_bool_p_.sum() > kappa_min:
+            status    = 2
+            idx_bool_ = idx_bool_p_.copy()
+            
+    idx_2_ = np.arange(w_.shape[0])[idx_bool_]
+
+    # Filter by spatial distance
+    if (idx_bool_.sum() > kappa_max) & (status != 4):
+        #print("(2) Filtering by distance: ")
+        sigma     = np.sort(d_h_[idx_bool_])[kappa_max]
+        idx_bool_ = idx_bool_ & (d_h_ <= sigma)
+        status   += 1
 
     idx_3_ = np.arange(w_.shape[0])[idx_bool_]
 

@@ -3,12 +3,9 @@ import os, glob, subprocess, datetime, sys
 import pandas as pd
 import numpy as np
 import pickle as pkl
-import scipy.stats as stats
 
 from scipy.integrate import quad
-from scipy import interpolate
 from scipy.stats import multivariate_normal, norm
-from scipy.interpolate import make_smoothing_spline
 
 def _interval_score(y_true, forecast_mean, forecast_std, z, alpha):
     """

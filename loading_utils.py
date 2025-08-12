@@ -28,7 +28,7 @@ def _process_training_curves(X_tr_, assets_, T, path, file_name):
     
     # Consitent asset ordering
     ac_tr_ = ac_tr_[assets_].to_numpy()
-    print(ac_tr_.shape)
+    #(ac_tr_.shape)
 
     F_tr_     = []
     dates_tr_ = []
@@ -71,7 +71,7 @@ def _process_testing_curves(X_ts_, assets_, p_, T, path, file_name):
     
     # Consitent asset ordering
     ac_ts_ = ac_ts_[assets_].to_numpy()
-    print(dates_.shape, ac_ts_.shape)
+    #print(dates_.shape, ac_ts_.shape)
 
     # Format random curves and dates
     dates_ts_ = dates_.reshape(int(dates_.shape[0]/T), T)
@@ -81,7 +81,7 @@ def _process_testing_curves(X_ts_, assets_, p_, T, path, file_name):
     # Normalized between 0 and 1 by Max Power
     for i in range(p_.shape[0]):
         F_ts_[..., i] /= p_[i]
-    print(F_ts_.min(), F_ts_.max())
+    #print(F_ts_.min(), F_ts_.max())
 
     # Asset coordiantes
     x_ts_ = X_ts_.copy()
@@ -123,7 +123,7 @@ def _process_traning_forecasts(assets_, p_, T, path, file_name):
     # Regularized so unfeaseble capacity factors does not appear
     E_tr_[E_tr_ > 1.] = 1.
     E_tr_[E_tr_ < 0.] = 0.
-    print(E_tr_.min(), E_tr_.max())
+    #print(E_tr_.min(), E_tr_.max())
 
     return np.concatenate([E_tr_[..., i] for i in range(p_.shape[0])], axis = 0)
 
@@ -159,6 +159,6 @@ def _process_testing_forecasts(assets_, p_, T, path, file_name):
     # Regularized so unfeaseble capacity factors does not appear
     E_ts_[E_ts_ > 1.] = 1.
     E_ts_[E_ts_ < 0.] = 0.
-    print(E_ts_.min(), E_ts_.max())
+    #print(E_ts_.min(), E_ts_.max())
 
     return E_ts_
