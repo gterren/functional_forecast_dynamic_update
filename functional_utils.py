@@ -1,14 +1,14 @@
-import os, glob, subprocess, datetime
+import subprocess
 
 import pandas as pd
 import numpy as np
-import pickle as pkl
+from scipy.stats import rankdata
 
 from statsmodels.distributions.empirical_distribution import ECDF
 
-path_to_fPCA   = '/Users/Guille/Desktop/dynamic_update/software/fPCA'
-path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth'
-path_to_data   = '/Users/Guille/Desktop/dynamic_update/data'
+# path_to_fPCA   = '/Users/Guille/Desktop/dynamic_update/software/fPCA'
+# path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth'
+# path_to_data   = '/Users/Guille/Desktop/dynamic_update/data'
 
 # Fit Functional PCA
 def _fPCA_fit(X_, path):
@@ -169,33 +169,126 @@ def _directional_quantile(curves, q_lower=0.025, q_upper=0.975):
 
     return np.max(scaled, axis=1)
 
-def _modified_band_depth(curves):
+def _eQuantile(_eCDF, q_):
     """
-    Compute Modified Band Depth (J=2) using vectorized NumPy operations.
-    
-    Parameters:
-    -----------
-    curves: ndarray, shape (n_samples, n_times)
-        Functional data matrix.
-    
-    Returns:
-    --------
-    mbd: ndarray, shape (n_samples,)
-        MBD scores for each function.
-    """
-    n, T  = curves.shape
-    pairs = np.array([(j, k) for j in range(n) for k in range(j+1, n)])
-    lower = np.minimum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
-    upper = np.maximum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
-    mbd   = np.zeros(n)
-    
-    # Check inclusion across all bands and time points
-    for i in range(n):
-        inside = np.logical_and(lower <= curves[i], curves[i] <= upper)
-        mbd[i] = inside.sum() / (len(pairs) * T)
-    
-    return mbd
+    Calculates quantiles from an ECDF.
 
+    Args:
+    _eCDF: function from statsmodels api
+    q_: A list or numpy array of quantiles to calculate (values between 0 and 1).
+
+    Returns:
+    _Q: A dictionary where keys are the input quantiles and values are the corresponding
+    Quantile values from the ECDF.
+    """
+
+    return np.array([_eCDF.x[np.searchsorted(_eCDF.y, q)] for q in q_])
+
+def _integrated_depth(X):
+
+    """
+    Integrated Depth based on z-score ranks at each time point.
+
+    Parameters:
+    - X: ndarray of shape (n_samples, n_timepoints)
+
+    Returns:
+    - depth: ndarray of shape (n_samples,)
+    """
+    n, T = X.shape
+    depth = np.zeros(n)
+
+    # Normalize: rank or z-score each time point
+    for t in range(T):
+        x_t = X[:, t]
+        
+        # Depth as distance from the median rank
+        ranks = rankdata(x_t, method='average')  # 1 to n
+        center = (n + 1) / 2
+        depth_t = 1.0 - (np.abs(ranks - center) / center)
+        
+        depth += depth_t
+
+    return depth / T  # Average over time
+
+# Derive confidence intervals from Directional Quantiles
+def _confidence_intervals_from_DQ(M_, alpha_):    
+    _y_pred_upper = {}
+    _y_pred_lower = {}
+    for i in range(len(alpha_)):
+        # Calculate functional Directional Quantiles (DQ)
+        DQ_ = _directional_quantile(M_, 
+                                    q_lower = alpha_[i]/2., 
+                                    q_upper = 1. - alpha_[i]/2.)
+        I_  = np.argsort(DQ_)[::-1]
+    
+        scen_                         = M_[I_[int(M_.shape[0] * alpha_[i]):],]
+        _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
+        _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
+
+    m_ = np.median(M_, axis = 0)
+    
+    return m_, _y_pred_upper, _y_pred_lower
+
+# Derive confidence intervals from a functional depth metric
+def _confidence_intervals_from_eCDF(M_, alpha_):    
+
+    _y_pred_upper = {}
+    _y_pred_lower = {}
+    for i in range(len(alpha_)):
+
+        _y_pred_lower[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [alpha_[i]/2.])
+                                                  for j in range(M_.shape[1])])[:, 0]
+        _y_pred_upper[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - alpha_[i]/2.])
+                                                  for j in range(M_.shape[1])])[:, 0]
+
+    m_ = np.median(M_, axis = 0)
+
+    return m_, _y_pred_upper, _y_pred_lower
+
+# Derive confidence intervals from a functional depth metric
+def _confidence_intervals_from_depth(M_, alpha_):
+
+    # Calculate Modified Band Depth ranking
+    I_ = np.argsort(_integrated_depth(M_))
+
+    _y_pred_upper = {}
+    _y_pred_lower = {}
+    for i in range(len(alpha_)):
+        scen_                         = M_[I_[int(M_.shape[0] * alpha_[i]):],]
+        _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
+        _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
+
+    m_ = np.median(M_, axis = 0)
+    
+    return m_, _y_pred_upper, _y_pred_lower
+
+# def _modified_band_depth(curves):
+#     """
+#     Compute Modified Band Depth (J=2) using vectorized NumPy operations.
+    
+#     Parameters:
+#     -----------
+#     curves: ndarray, shape (n_samples, n_times)
+#         Functional data matrix.
+    
+#     Returns:
+#     --------
+#     mbd: ndarray, shape (n_samples,)
+#         MBD scores for each function.
+#     """
+#     n, T  = curves.shape
+#     pairs = np.array([(j, k) for j in range(n) for k in range(j+1, n)])
+#     lower = np.minimum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
+#     upper = np.maximum(curves[pairs[:, 0]][:, None, :], curves[pairs[:, 1]][:, None, :])
+#     mbd   = np.zeros(n)
+    
+#     # Check inclusion across all bands and time points
+#     for i in range(n):
+#         inside = np.logical_and(lower <= curves[i], curves[i] <= upper)
+#         mbd[i] = inside.sum() / (len(pairs) * T)
+    
+#     return mbd
 
 # @njit
 # def _modified_band_depth(curves):
@@ -229,75 +322,22 @@ def _modified_band_depth(curves):
 #     return mbd
 
 
-def _eQuantile(_eCDF, q_):
-    """
-    Calculates quantiles from an ECDF.
+# # Derive confidence intervals from a functional depth metric
+# def _confidence_intervals_from_MBD(M_, alpha_, zeta_):
 
-    Args:
-    _eCDF: function from statsmodels api
-    q_: A list or numpy array of quantiles to calculate (values between 0 and 1).
+#     # Calculate Modified Band Depth ranking
+#     MBD_ = _modified_band_depth(M_)
+#     I_   = np.argsort(MBD_)
+#     _y_pred_upper = {}
+#     _y_pred_lower = {}
+#     for i in range(len(alpha_)):
+#         scen_                         =  M_[I_[int(M_.shape[0] * zeta_[i]):],]
+#         _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
+#         _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
 
-    Returns:
-    _Q: A dictionary where keys are the input quantiles and values are the corresponding
-    Quantile values from the ECDF.
-    """
+#     m_ = np.median(M_, axis = 0)
 
-    return np.array([_eCDF.x[np.searchsorted(_eCDF.y, q)] for q in q_])
-
-# Derive confidence intervals from Directional Quantiles
-def _confidence_intervals_from_DQ(M_, alpha_, zeta_):
-    
-    _y_pred_upper = {}
-    _y_pred_lower = {}
-
-    # Calculate functional Directional Quantiles (DQ)
-    DQ_ = _directional_quantile(M_)
-    
-    for i in range(len(alpha_)):
-
-        I_  = np.argsort(np.absolute(DQ_))[::-1]
-
-        scen_                         = M_[I_[int(M_.shape[0] * zeta_[i]):],]
-        _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
-        _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
-
-    m_ = np.median(M_, axis = 0)
-
-    return m_, _y_pred_upper, _y_pred_lower
-
-# Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_MBD(M_, alpha_, zeta_):
-
-    # Calculate Modified Band Depth ranking
-    MBD_ = _modified_band_depth(M_)
-    I_   = np.argsort(MBD_)
-    _y_pred_upper = {}
-    _y_pred_lower = {}
-    for i in range(len(alpha_)):
-        scen_                         =  M_[I_[int(M_.shape[0] * zeta_[i]):],]
-        _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
-        _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
-
-    m_ = np.median(M_, axis = 0)
-
-    return m_, _y_pred_upper, _y_pred_lower
-
-# Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_eCDF(M_, alpha_, zeta_):    
-
-    _y_pred_upper = {}
-    _y_pred_lower = {}
-    for i in range(len(alpha_)):
-
-        _y_pred_lower[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [zeta_[i]/2.])
-                                                  for j in range(M_.shape[1])])[:, 0]
-        _y_pred_upper[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - (zeta_[i]/2.)])
-                                                  for j in range(M_.shape[1])])[:, 0]
-
-    m_ = np.median(M_, axis = 0)
-
-    return m_, _y_pred_upper, _y_pred_lower
-
+#     return m_, _y_pred_upper, _y_pred_lower
 
 # X_tr_ = pd.DataFrame(scs_)
 # X_ts_ = pd.DataFrame(scs_[:11, :])

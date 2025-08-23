@@ -201,14 +201,14 @@ def _empirical_coverage_score(y_true, _lower, _upper, alpha_):
     
     Parameters:
     - y_: Observed (true) values
-    - lower_: upper confidence bound
-    - upper_: lower confidence dound
+    - lower_: lower confidence bound
+    - upper_: upper confidence dound
     
     Returns:
     - coverage_score: The calculated interval score
     """
 
-    def _converage_score(y_true, lower_, upper_):
+    def _coverage_score(y_true, lower_, upper_):
         coverage = 0
         for i in range(y_true.shape[0]): 
             if (y_true[i] < lower_[i]) or (y_true[i] > upper_[i]):
@@ -220,7 +220,7 @@ def _empirical_coverage_score(y_true, _lower, _upper, alpha_):
 
     cs_ = np.zeros((len(alpha_),))
     for i in range(len(alpha_)):
-        cs_[i] = _converage_score(y_true, _lower[f'{alpha_[i]}'], _upper[f'{alpha_[i]}'])
+        cs_[i] = _coverage_score(y_true, _lower[f'{alpha_[i]}'], _upper[f'{alpha_[i]}'])
     
     return cs_
 
@@ -282,7 +282,7 @@ def _weighted_empirical_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_up
         is_[:, i] = w_[i] * is_[:, i]
     term2 = np.sum(is_, axis = 1)
         
-    return term1 * (term1 + term2)
+    return term0 * (term1 + term2)
 
 def _ignorance_scores(f_ts_, f_ts_hat_, s_ts_hat_):
          
