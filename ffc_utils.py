@@ -88,7 +88,7 @@ def _periodic_dist(d, gamma,
     return np.sin(0.5*day_to_degree*(d - gamma)*degree_to_rad)**2
 
 # Filtering scenarios when they are above the upper threshold or below the lower threshold
-def _scenario_filtering(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max):
+def _scenario_filtering_v2(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max):
 
     status = 0
     sigma  = 0
@@ -144,6 +144,42 @@ def _scenario_filtering(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max):
 
     return w_, idx_1_, idx_2_, idx_3_, idx_4_, Gamma, sigma, status
 
+# Filtering scenarios when they are above the upper threshold or below the lower threshold
+def _scenario_filtering(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
+
+    sigma  = 0
+    idx_spatial_  = None
+    idx_temporal_ = None
+    # Filter by similarity
+    idx_          = np.arange(d_p_.shape[0], dtype = int)
+    w_            = np.min(W_, axis = 0)
+    idx_neigbors_ = idx_[w_ >= xi]
+    idx_final_    = idx_neigbors_.copy()
+
+    if idx_neigbors_.shape[0] > kappa_max:
+
+        # Filter by temporal distance
+        idx_temporal_ = idx_[d_p_ <= gamma]
+        idx_temporal_ = np.intersect1d(idx_neigbors_, idx_temporal_)
+        if idx_.shape[0] < kappa_min:
+            idx_temporal_ = idx_neigbors_.copy()
+
+        # Filter by spatial distance
+        idx_spatial_rank_ = np.argsort(d_h_[idx_temporal_])
+        idx_spatial_      = idx_temporal_[idx_spatial_rank_][:kappa_max]
+        if idx_spatial_.shape[0] < kappa_min:
+            idx_spatial_ = idx_temporal_.copy()
+        else:
+            sigma = d_h_[idx_spatial_].max()
+
+        idx_final_ = idx_spatial_.copy()
+
+    if idx_neigbors_.shape[0] < kappa_min:
+        # Increase similarity threshold
+        idx_final_ = idx_[w_ >= np.sort(w_)[::-1][kappa_min]]
+        
+    return w_, idx_neigbors_, idx_temporal_, idx_spatial_, idx_final_, sigma
+
 def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t_ts,
                                   forget_rate_f  = 1.,
                                   forget_rate_e  = .5,
@@ -154,8 +190,8 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
                                   nu             = 340,
                                   gamma          = 30,
                                   xi             = 0.99,
-                                  kappa_min      = 100,
-                                  kappa_max      = 1000):
+                                  kappa_min      = 500,
+                                  kappa_max      = 1500):
 
     # Get constants
     T    = E_tr_.shape[1]
@@ -190,9 +226,7 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     idx_2_, 
     idx_3_, 
     idx_4_, 
-    Gamma,
-    sigma, 
-    status) = _scenario_filtering(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max)
+    sigma) = _scenario_filtering(W_, d_h_, d_p_, Gamma, xi, kappa_min, kappa_max)
 
     eta_ = _logistic(s_ - t*5 - nu*60., trust_rate)
 
@@ -219,8 +253,7 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
         'xi': xi,
         't_ts': t_ts,
         'Gamma': Gamma,
-        'gamma': gamma,
         'sigma': sigma,
     }
 
-    return _meta, M_, status
+    return _meta, M_
