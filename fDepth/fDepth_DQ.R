@@ -2,8 +2,8 @@
 
 print('Running fDepth_DQ.R ... ')
 
-install.packages("fdaoutlier",repos = "http://cran.us.r-project.org")
-install.packages("fda.usc",repos = "http://cran.us.r-project.org")
+install.packages("fdaoutlier" ,repos = "http://cran.us.r-project.org")
+install.packages("fda.usc", repos = "http://cran.us.r-project.org")
 
 library(fdaoutlier)
 #library(ddalpha)

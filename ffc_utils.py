@@ -30,6 +30,14 @@ def _exponential_decay(S, decay_rate):
 def _logistic(x_, k):
     return 1. - 1.0 / (1.0 + np.exp(np.log(999) * x_ / (k*60/2)))
 
+# Linear Inverse Exponential function
+def _LIE(x_, t, T, nu, trust_rate, k = 2.5, alpha = 1.):
+    x_ = x_ - T*5 + nu*5*12
+    x_ = k*x_/(nu*5*12 - 5)
+    y_ = np.where(x_ > 0, -x_, -alpha*(np.exp(x_) - 1))
+    y_ = (y_ + k)/(k + alpha)
+    return trust_rate*y_
+
 def _haversine_dist(x_1_, x_2_):
     """
     Calculate the distance between two points on Earth using the Haversine formula.
@@ -191,7 +199,8 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
                                   gamma          = 30,
                                   xi             = 0.99,
                                   kappa_min      = 500,
-                                  kappa_max      = 1500):
+                                  kappa_max      = 1500,
+                                  solar_hours   = False):
 
     # Get constants
     T    = E_tr_.shape[1]
@@ -205,6 +214,11 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     psi_1_ = _exponential_growth(t, forget_rate_e)
     psi_2_ = _exponential_decay(T - t, lookup_rate)
     psi_   = np.concatenate([psi_1_, psi_2_], axis = 0)
+
+    # Only for solar
+    if solar_hours:
+        phi_[e_[:t] < .01] = 0.
+        psi_[e_ < .01]     = 0.
 
     # d: Euclidean distance between samples weighted by importance weights
     d_f_ = _euclidian_dist(F_tr_[:, :t], f_, w_ = phi_)
@@ -228,7 +242,8 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     idx_4_, 
     sigma) = _scenario_filtering(W_, d_h_, d_p_, Gamma, xi, kappa_min, kappa_max)
 
-    eta_ = _logistic(s_ - t*5 - nu*60., trust_rate)
+    #eta_ = _logistic(s_ - t*5 - nu*60., trust_rate)
+    eta_ = _LIE(s_[::-1], t, T, nu, trust_rate)
 
     # Fuse scenarios with day-ahead forecasts
     M_ = np.zeros((idx_4_.shape[0], eta_.shape[0]))

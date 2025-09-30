@@ -14,6 +14,6 @@ cd /home/gterren/dynamic_update/functional_forecast_dynamic_update
 source activate du
 
 mpirun -np 12 python validate_ffc.py $1 $2
-#mpirun -np 11 python calibrate_ffc.py $1 $2 DQ
-#mpirun -np 1 python calibrate_ffc.py 144 alpha DQ
+#mpirun -np 20 python test_ffc.py
 
+#mpirun -np 12 python validate_ffc.py xi 144
