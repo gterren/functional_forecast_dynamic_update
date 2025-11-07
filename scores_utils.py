@@ -1,8 +1,5 @@
-import os, glob, subprocess, datetime, sys
-
 import pandas as pd
 import numpy as np
-import pickle as pkl
 
 from scipy.integrate import quad
 from scipy.stats import multivariate_normal, norm
@@ -140,37 +137,37 @@ def _coverage_score(y_true, forecast_mean, forecast_std, z, alpha):
     return coverage #- (1. - 2.*alpha)
 
 
-def _weighted_interval_score(y_true, forecast_mean, forecast_cov,
-                             alpha_ = [0.05, 0.1, 0.2, 0.4, 0.8],
-                             z_     = [2.3, 1.96, 1.65, 1.28, 0.84]):
-    """
-    Calculate the interval score for probabilistic forecasts with an interval [lower, upper].
+# def _weighted_interval_score(y_true, forecast_mean, forecast_cov,
+#                              alpha_ = [0.05, 0.1, 0.2, 0.4, 0.8],
+#                              z_     = [2.3, 1.96, 1.65, 1.28, 0.84]):
+#     """
+#     Calculate the interval score for probabilistic forecasts with an interval [lower, upper].
     
-    Parameters:
-    - y_true: Observed (true) values
-    - forecast_mean: Mean of the predicted distribution (e.g., mean of the normal distribution)
-    - forecast_cov: Standard deviation of the predicted distribution
-    - alpha: Significance level (default 0.05 for 90% confidence interval)
-    - z: z-score for a normal distribution 
+#     Parameters:
+#     - y_true: Observed (true) values
+#     - forecast_mean: Mean of the predicted distribution (e.g., mean of the normal distribution)
+#     - forecast_cov: Standard deviation of the predicted distribution
+#     - alpha: Significance level (default 0.05 for 90% confidence interval)
+#     - z: z-score for a normal distribution 
 
-    Returns:
-    - WIS: float, the Weighted Interval Score.
-    """
+#     Returns:
+#     - WIS: float, the Weighted Interval Score.
+#     """
     
-    forecast_std = np.sqrt(np.diagonal(forecast_cov))
+#     forecast_std = np.sqrt(np.diagonal(forecast_cov))
   
-    # Calculate the interval score
-    w_  = np.array(alpha_)/2.
-    is_ = np.array([_interval_score(y_true, forecast_mean, forecast_std, z, alpha) 
-                    for z, alpha in zip(z_, alpha_)])
-    term0 = 1./(len(z_) + 1/2.)
-    term1 = 1/2. * np.absolute(y_true - forecast_mean)
+#     # Calculate the interval score
+#     w_  = np.array(alpha_)/2.
+#     is_ = np.array([_interval_score(y_true, forecast_mean, forecast_std, z, alpha) 
+#                     for z, alpha in zip(z_, alpha_)])
+#     term0 = 1./(len(z_) + 1/2.)
+#     term1 = 1/2. * np.absolute(y_true - forecast_mean)
     
-    for k in range(w_.shape[0]):
-        is_[k, :] = w_[k] * is_[k, :]
-    term2 = np.sum(is_, axis = 0)
+#     for k in range(w_.shape[0]):
+#         is_[k, :] = w_[k] * is_[k, :]
+#     term2 = np.sum(is_, axis = 0)
         
-    return term1 * (term1 + term2)
+#     return term1 * (term1 + term2)
     
     
 def _ks(y_true, forecast_mean, forecast_std, nbins = 100):
@@ -195,34 +192,43 @@ def _ks(y_true, forecast_mean, forecast_std, nbins = 100):
     
     return ks
 
-def _empirical_coverage_score(y_true, _lower, _upper, alpha_):
-    """`
-    Calculate the coverage score for probabilistic forecasts with an interval [lower, upper]
-    
-    Parameters:
-    - y_: Observed (true) values
-    - lower_: lower confidence bound
-    - upper_: upper confidence dound
-    
-    Returns:
-    - coverage_score: The calculated interval score
-    """
+def _empirical_coverage_score(y_true, lower_, upper_):
+    coverage = 0
+    for i in range(y_true.shape[0]): 
+        if (y_true[i] < lower_[i]) or (y_true[i] > upper_[i]):
+            coverage += 0
+        else:
+            coverage += 1
+    return coverage / y_true.shape[0]
 
-    def _coverage_score(y_true, lower_, upper_):
-        coverage = 0
-        for i in range(y_true.shape[0]): 
-            if (y_true[i] < lower_[i]) or (y_true[i] > upper_[i]):
-                coverage += 0
-            else:
-                coverage += 1
-        return coverage / y_true.shape[0]
-
-
-    cs_ = np.zeros((len(alpha_),))
-    for i in range(len(alpha_)):
-        cs_[i] = _coverage_score(y_true, _lower[f'{alpha_[i]}'], _upper[f'{alpha_[i]}'])
+# def _empirical_coverage_score(y_true, _lower, _upper, alpha_):
+#     """`
+#     Calculate the coverage score for probabilistic forecasts with an interval [lower, upper]
     
-    return cs_
+#     Parameters:
+#     - y_: Observed (true) values
+#     - lower_: lower confidence bound
+#     - upper_: upper confidence dound
+    
+#     Returns:
+#     - coverage_score: The calculated interval score
+#     """
+
+#     def _coverage_score(y_true, lower_, upper_):
+#         coverage = 0
+#         for i in range(y_true.shape[0]): 
+#             if (y_true[i] < lower_[i]) or (y_true[i] > upper_[i]):
+#                 coverage += 0
+#             else:
+#                 coverage += 1
+#         return coverage / y_true.shape[0]
+
+
+#     cs_ = np.zeros((len(alpha_),))
+#     for i in range(len(alpha_)):
+#         cs_[i] = _coverage_score(y_true, _lower[f'{alpha_[i]}'], _upper[f'{alpha_[i]}'])
+    
+#     return cs_
 
 
 def _empirical_interval_score(y_true, y_pred_lower, y_pred_upper, alpha):
@@ -341,43 +347,3 @@ def _errors(ac_, fc_):
                                                                                 'MBE'])
  
     
-# def _evaludate_update(f_ts_, f_ts_hat_, S_ts_hat_, F_scen_):
-    
-#     s_ts_hat_ = np.sqrt(np.diagonal(S_ts_hat_))
-     
-#     # Calculate the interval score
-#     IS975 = _interval_score(f_ts_, f_ts_hat_, s_ts_hat_, 2.3, 0.05).mean()
-#     IS95  = _interval_score(f_ts_, f_ts_hat_, s_ts_hat_, 1.96, 0.1).mean()
-#     IS90  = _interval_score(f_ts_, f_ts_hat_, s_ts_hat_, 1.65, 0.2).mean()
-#     IS80  = _interval_score(f_ts_, f_ts_hat_, s_ts_hat_, 1.28, 0.4).mean()
-#     IS60  = _interval_score(f_ts_, f_ts_hat_, s_ts_hat_, 0.84, 0.8).mean()
-#     IS_   = [IS975, IS95, IS90, IS80, IS60]
-#     #print(IS_)
-
-#     CS975 = _coverage_score(f_ts_, f_ts_hat_, s_ts_hat_, 2.3, 0.05)
-#     CS95  = _coverage_score(f_ts_, f_ts_hat_, s_ts_hat_, 1.96, 0.1)
-#     CS90  = _coverage_score(f_ts_, f_ts_hat_, s_ts_hat_, 1.65, 0.2)
-#     CS80  = _coverage_score(f_ts_, f_ts_hat_, s_ts_hat_, 1.28, 0.4)
-#     CS60  = _coverage_score(f_ts_, f_ts_hat_, s_ts_hat_, 0.84, 0.8)
-#     CS_   = [CS975, CS95, CS90, CS80, CS60]
-#     #print(CS_)
-    
-#     WIS = _weighted_interval_score(f_ts_, f_ts_hat_, S_ts_hat_).mean()
-#     #print(WIS_)
-
-#     LogS = _logarithmic_score(f_ts_, f_ts_hat_, s_ts_hat_).sum()
-#     CRPS = _crps(f_ts_, f_ts_hat_, s_ts_hat_).sum()
-
-#     # CRPS = _crps_monte_carlo(f_ts_, F_scen_).sum()
-#     # print(CRPS)
-
-#     PIT_ = _pit(f_ts_, f_ts_hat_, s_ts_hat_)
-
-#     column_names  = ['IS975', 'IS95', 'IS90', 'IS80', 'IS60']
-#     column_names += ['CS975', 'CS95', 'CS90', 'CS80', 'CS60']
-#     column_names += ['PITmean', 'PITstd', 'LogS', 'CRPS', 'WIS']
-
-#     return pd.DataFrame(np.array(IS_ + CS_ + PIT_ + [LogS, CRPS, WIS])[:, np.newaxis].T, 
-#                         columns = column_names).T
-
-# #scores_ = _evaludate_update(f_ts_, f_ts_hat_, S_ts_hat_, F_scen_)

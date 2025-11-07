@@ -1,5 +1,8 @@
 import numpy as np
 
+from skfda.representation.basis import Fourier, BSpline
+from skfda import FDataGrid
+
 # Calculate weighted (w_) distance between X_ and x_
 def _euclidian_dist(X_, x_, w_=[]):
     if len(w_) == 0:
@@ -184,7 +187,7 @@ def _scenario_filtering(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
 
     if idx_neigbors_.shape[0] < kappa_min:
         # Increase similarity threshold
-        idx_final_ = idx_[w_ >= np.sort(w_)[::-1][kappa_min]]
+        idx_final_ = idx_[w_ >= np.sort(w_)[::-1][kappa_min - 1]]
         
     return w_, idx_neigbors_, idx_temporal_, idx_spatial_, idx_final_, sigma
 
@@ -200,7 +203,10 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
                                   xi             = 0.99,
                                   kappa_min      = 500,
                                   kappa_max      = 1500,
-                                  solar_hours   = False):
+                                  idx_hours_     = False):
+
+    kappa_min = int(kappa_min)
+    kappa_max = int(kappa_max)
 
     # Get constants
     T    = E_tr_.shape[1]
@@ -216,9 +222,8 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     psi_   = np.concatenate([psi_1_, psi_2_], axis = 0)
 
     # Only for solar
-    if solar_hours:
-        phi_[e_[:t] < .01] = 0.
-        psi_[e_ < .01]     = 0.
+    phi_[~idx_hours_[:t]] = 0.
+    psi_[~idx_hours_]     = 0.
 
     # d: Euclidean distance between samples weighted by importance weights
     d_f_ = _euclidian_dist(F_tr_[:, :t], f_, w_ = phi_)
@@ -246,10 +251,15 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     eta_ = _LIE(s_[::-1], t, T, nu, trust_rate)
 
     # Fuse scenarios with day-ahead forecasts
-    M_ = np.zeros((idx_4_.shape[0], eta_.shape[0]))
+    M_   = np.zeros((idx_4_.shape[0], eta_.shape[0]))
+    m_0_ = np.zeros((idx_4_.shape[0], 1))
     for i, j in zip(idx_4_, range(idx_4_.shape[0])):
         M_[j, :] = F_tr_[i, t:]*(1. - eta_) + E_tr_[i, t:]*eta_
+        m_0_[j]  = F_tr_[i, t - 1]
 
+    w_p_         = w_[idx_4_]/w_[idx_4_].sum()
+    focal_curve_ = M_.T @ w_p_
+    
     _meta = {
         'phi': phi_,
         'psi': psi_,
@@ -269,6 +279,157 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
         't_ts': t_ts,
         'Gamma': Gamma,
         'sigma': sigma,
+        'm_0': m_0_,
+        'focal_curve': focal_curve_,
     }
 
     return _meta, M_
+
+def _focal_curve_envelope(_depth, Y_, dt_, dist_, max_iter = 100):
+    """
+    Envelope algorithm to obtain functional neighbourhoods.
+
+    Parameters
+    ----------
+    data : dict
+        Dictionary with keys:
+            - "x": np.ndarray of grid points (n_points,)
+            - "y": np.ndarray of function values (n_points, n_curves)
+    focal : int or str
+        Index (or column name) of the focal curve to envelope.
+    plot : bool, optional
+        Whether to plot the selected curves in each iteration.
+    max_iter : int, optional
+        Maximum number of iterations before stopping.
+
+    Returns
+    -------
+    dict
+        Dictionary with key 'Jordered' containing the ordered list
+        of selected curve indices.
+    """
+    
+    # Compute depth to find the focal-curve
+    _fd_filtered = FDataGrid(data_matrix = Y_.T,
+                                   grid_points = dt_)
+    
+    filtered_depth_ = _depth(_fd_filtered)
+    idx_focal       = np.argsort(-filtered_depth_)[0]
+    f_              = Y_[:, idx_focal]
+
+    if isinstance(dist_, str):
+        # Distances from curves to the focal-curve
+        if dist_ == 'sup':
+            dist_ = np.max(np.abs(Y_.T - f_), axis = 1)
+        elif dist_ == 'l2':
+            dist_ = np.sum((Y_.T - f_)**2, axis = 1)
+            
+    # Initialize
+    idx_subsample = []
+    idx_          = [i for i in range(Y_.shape[1]) if i != idx_focal]
+    iter_depth    = [0]
+    iteration     = 0
+
+    while len(idx_) > 1:
+        
+        # New interation
+        iteration += 1
+        
+        # Sort curves by distance
+        idx_sorted_dist_   = [idx_[i] for i in np.argsort(dist_[idx_])]
+        idx_iter_subsample = [idx_sorted_dist_[0]]
+        idx_candidates     = idx_sorted_dist_[1:]
+        # Iterative envelope selection
+        remaining_points = set(dt_)
+        while remaining_points and idx_candidates:
+            idx_next = idx_candidates[0]
+            combined = idx_iter_subsample + [idx_next]
+            
+            # Check if envelops
+            sign_ = np.sign(Y_[:, combined].T - f_)
+            Ji_   = np.where(np.abs(np.sum(sign_, axis = 0)) < len(combined))[0]
+            
+            if len(remaining_points - set(dt_[Ji_]) ) == len(remaining_points):
+                # Does not envelope
+                idx_candidates.pop(0)
+            else:
+                remaining_points -= set(dt_[Ji_])
+                
+                idx_iter_subsample.append(idx_next)
+                
+                idx_candidates = [c for c in idx_candidates if c not in idx_iter_subsample]
+                idx_           = [c for c in idx_ if c not in idx_iter_subsample]
+
+        # Compute functional depth 
+        _fd_subset = FDataGrid(data_matrix = (Y_[:, [idx_focal] 
+                                                 + idx_subsample 
+                                                 + idx_iter_subsample]).T,
+                               grid_points = dt_)
+    
+        depth_             = _depth(_fd_subset)
+        idx_depth_         = np.argsort(-depth_)
+        idx_ordered_depth_ = np.array([idx_focal] + idx_subsample + idx_iter_subsample)[idx_depth_]
+
+        # How deep the new set of curves is?
+        depth_percentile = 1 - np.where(idx_ordered_depth_ == idx_focal)[0][0]/(len(idx_ordered_depth_) - 1)
+        
+        iter_depth.append(depth_percentile)
+
+        # Accept subsample if depth improves
+        if max(iter_depth[:-1]) <= iter_depth[-1]:
+            idx_subsample.extend(idx_iter_subsample)
+            
+        # Stop if there is not more candidate curves
+        if not idx_candidates:
+            break
+            
+        # Stop if max_iter is reached
+        if iteration >= max_iter:
+            break
+
+    # Selected curves
+    idx_sel_ = [idx_focal] + idx_subsample
+    
+    # Final selected curves ordered by depth
+    _fd_filtered = FDataGrid(data_matrix = Y_[:, idx_sel_].T,
+                             grid_points = dt_)
+        
+    filtered_depth_             = _depth(_fd_filtered)
+    idx_filtered_depth_         = np.argsort(-filtered_depth_)
+    idx_ordered_filtered_depth_ = np.array(idx_sel_)[idx_filtered_depth_]
+
+    return Y_[:, idx_ordered_filtered_depth_]
+
+
+# Downsample collection of curvers
+def _functional_downsampling(X_, x_, dt_, subsample, n_basis = 20):
+
+    n_samples, n_points = X_.shape
+
+    X_ = np.concatenate([x_, X_], axis = 1)
+    # Ensure the length is divisible by subsample
+    dt    = dt_[1] - dt_[0]
+    t_    = dt_[-n_points-1:]
+    t_ds_ = np.linspace(t_[1], t_[-1], int(n_points/subsample))
+
+    # Create an FDataGrid object
+    data_ = [X_[i, :] for i in range(n_samples)]
+    _fd   = FDataGrid(data_matrix = data_, 
+                      grid_points = t_)
+
+    # Interpolate first (useful if data are unevenly spaced or need smoothing)
+    _fd_interp = _fd.to_basis(BSpline(n_basis = n_basis))
+    M_interp_  = _fd_interp.to_grid(t_)
+    M_interp_  = np.stack([M_interp_.data_matrix[i] 
+                           for i in range(n_samples)])[..., 0]
+    
+    # Re-evaluate existing data
+    M_interp_ds_ = _fd_interp.to_grid(t_ds_)
+    M_interp_ds_ = np.stack([M_interp_ds_.data_matrix[i] 
+                             for i in range(n_samples)])[..., 0]
+
+    return M_interp_, M_interp_ds_, t_ds_
+
+# Derive confidence intervals from a functional depth metric
+def _functional_confidence_band(J_, k):
+    return J_[0, :], np.max(J_[1:k, :], axis = 0), np.min(J_[1:k, :], axis = 0)

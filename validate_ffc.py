@@ -9,7 +9,6 @@ from mpi4py import MPI
 
 from ffc_utils import _fknn_forecast_dynamic_update
 
-
 from functional_utils import _confidence_intervals_from_eCDF
 
 from scores_utils import (_empirical_coverage_score,
@@ -62,7 +61,7 @@ def _get_node_info(verbose = False):
 i_job, N_jobs, _comm = _get_node_info()
 
 T        = 288
-resource = 'solar'
+resource = 'wind'
 
 # Load 2017 data as training set
 with open(path_to_data + f"/preprocessed_{resource}_2017.pkl", 'rb') as f:
@@ -102,11 +101,11 @@ dt_ = np.array([t * 5 for t in range(T)])
 dx_ = pd.to_datetime(pd.DataFrame({"time": dt_}).time, unit = "m").dt.strftime("%H:%M").to_numpy()
 #print(dt_.shape, dx_.shape)
 
-# # Filter solar hours with loading solar set
-# idx_ = (np.sum(np.sum(F_tr_, axis = 0), axis = 1) 
-#         + np.sum(np.sum(F_ts_, axis = 0), axis = 1)
-#         + np.sum(np.sum(E_tr_, axis = 0), axis = 1)
-#         + np.sum(np.sum(E_ts_, axis = 0), axis = 1)) > 0.
+# Filter solar hours with loading solar set
+idx_hours_ = (np.sum(np.sum(F_tr_, axis = 0), axis = 1) 
+              + np.sum(np.sum(F_ts_, axis = 0), axis = 1)
+              + np.sum(np.sum(E_tr_, axis = 0), axis = 1)
+              + np.sum(np.sum(E_ts_, axis = 0), axis = 1)) > 0.
 
 # F_tr_ = F_tr_[:, idx_, :]
 # E_tr_ = E_tr_[:, idx_, :]
@@ -178,29 +177,29 @@ alpha_ = [0.1, 0.2, 0.3, 0.4]
 # Hyperparameters for the functional forecast dynamic update:
 # Day-Ahead + Observations: Wind
 # forget_rate_f_  = [0.0625]
-# forget_rate_e_  = [2.]
-# lookup_rate_    = [128]
-# length_scale_f_ = [0.025]   
+# forget_rate_e_  = [1.]
+# lookup_rate_    = [64.]
+# length_scale_f_ = [0.05]   
 # length_scale_e_ = [0.1]
-# trust_rate_     = [0.2]
-# nu_             = [3]
+# trust_rate_     = [0.1]
+# nu_             = [4]
 # xi_             = [0.9]
 # gamma_          = [90]
-# kappa_min_      = [50]
-# kappa_max_      = [150]
+# kappa_min_      = [100]
+# kappa_max_      = [125]
 
 # Day-Ahead + Observations: Solar
 forget_rate_f_  = [0.0625]
-forget_rate_e_  = [1.]
-lookup_rate_    = [8.]
+forget_rate_e_  = [.5]
+lookup_rate_    = [512.]
 length_scale_f_ = [0.025]   
 length_scale_e_ = [0.05]
 trust_rate_     = [0.2]
-nu_             = [8]
-xi_             = [0.75]
-gamma_          = [50]
-kappa_min_      = [75]
-kappa_max_      = [200]
+nu_             = [10]
+xi_             = [0.85]
+gamma_          = [30]
+kappa_min_      = [50]
+kappa_max_      = [250]
 
 # Observations only
 # forget_rate_f_  = [2.]
@@ -241,8 +240,8 @@ if sys.argv[1] == 'length_scale_e':
     length_scale_e_ = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5]
 
 if sys.argv[1] == 'lookup_rate':
-    #lookup_rate_ = [0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1028]
-    lookup_rate_ = [0.5, 1., 2., 3., 4., 5., 6., 7., 8., 10., 16., 20.]
+    lookup_rate_ = [0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1028]
+    #lookup_rate_ = [0.5, 1., 2., 3., 4., 5., 6., 7., 8., 10., 16., 20.]
 
 if sys.argv[1] == 'trust_rate':
     trust_rate_ = [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.]
@@ -251,16 +250,16 @@ if sys.argv[1] == 'nu':
     nu_ = [1., 2., 3, 4., 5, 6., 8., 10., 12., 14., 16., 18]
 
 if sys.argv[1] == 'gamma':
-    gamma_ = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140]
+    gamma_ = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
 
 if sys.argv[1] == 'xi':
     xi_ = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.975, 0.99]
 
 if sys.argv[1] == 'kappa_min':
-    kappa_min_ = [25, 50, 75, 100, 200, 300, 400, 500, 600, 700, 800, 900]
+    kappa_min_ = [25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 375, 400]
 
 if sys.argv[1] == 'kappa_max':
-    kappa_max_ = [150, 175, 200, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250]
+    kappa_max_ = [100, 125, 150, 175, 200, 250, 300, 350, 400, 500, 750, 1000]
 print(i_job, sys.argv[1], sys.argv[2], resource)
 
 params_ = tuple(product(forget_rate_f_, 
@@ -297,36 +296,36 @@ try:
                 s_   = dt_[time:]
 
                 _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t,
-                                                        forget_rate_f  = params_[0],
-                                                        forget_rate_e  = params_[1],
-                                                        length_scale_f = params_[2],
-                                                        length_scale_e = params_[3],
-                                                        lookup_rate    = params_[4],
-                                                        trust_rate     = params_[5],
-                                                        nu             = params_[6],
-                                                        gamma          = params_[7],
-                                                        xi             = params_[8],
-                                                        kappa_min      = params_[9],
-                                                        kappa_max      = params_[10], 
-                                                        solar_hours    = True)
+                                                          forget_rate_f  = params_[0],
+                                                          forget_rate_e  = params_[1],
+                                                          length_scale_f = params_[2],
+                                                          length_scale_e = params_[3],
+                                                          lookup_rate    = params_[4],
+                                                          trust_rate     = params_[5],
+                                                          nu             = params_[6],
+                                                          gamma          = params_[7],
+                                                          xi             = params_[8],
+                                                          kappa_min      = params_[9],
+                                                          kappa_max      = params_[10], 
+                                                          idx_hours_     = idx_hours_)
 
                 f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
                 f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
         
-                # Calculate marginal empirical confidence intervals
+                # Calculate functional confidence bands
                 m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_)
 
                 WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, 
-                                                                m_, 
-                                                                _lower, 
-                                                                _upper, 
-                                                                alpha_))
+                                                                   m_, 
+                                                                   _lower, 
+                                                                   _upper, 
+                                                                   alpha_))
 
                 WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], 
-                                                                m_, 
-                                                                _lower, 
-                                                                _upper, 
-                                                                alpha_))
+                                                                   m_, 
+                                                                   _lower, 
+                                                                   _upper, 
+                                                                   alpha_))
 
                 # Save results
                 dfs_.append(list(params_ + tuple([time, 
@@ -372,4 +371,4 @@ dfs_ = pd.DataFrame(dfs_, columns = ['forget_rate_f',
 dfs_ = _gather_node_data(_comm, dfs_)
 
 _save_validation_csv(dfs_, 
-                     path_to_file = path_to_validation + f'/validation_ffc-{resource}-WIS-{sys.argv[1]}-2.csv')
+                     path_to_file = path_to_validation + f'/validation_ffc-{resource}-WIS-{sys.argv[1]}.csv')
