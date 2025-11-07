@@ -7,10 +7,8 @@ library(fda.usc)
 
 path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/functional_forecast_dynamic_update/fDepth/'
 
-file_name = 'curves.csv'
-
 # Load actual data for a given source
-curves_ = read.csv(paste(path_to_fDepth, file_name, sep = ''), 
+curves_ = read.csv(paste(path_to_fDepth, 'curves.csv', sep = ''), 
                    sep = ',', 
                    header = FALSE)
 # Band Depth

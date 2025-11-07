@@ -7,7 +7,7 @@ import numpy as np
 from scipy import interpolate
 
 # Loading and processing metadata
-def _process_metadata(path, file_name):
+def _process_wind_metadata(path, file_name):
     
     meta_ = pd.read_excel(path + file_name)
     meta_ = meta_.rename(columns = {'lati': 'lat', 
@@ -15,20 +15,34 @@ def _process_metadata(path, file_name):
                                     'Facility.Name': 'name', 
                                     'Capacity': 'capacity'})    
     
-    return meta_[['name', 'lon', 'lat', 'capacity']].set_index('name')
+    return meta_[['name', 
+                  'lon', 
+                  'lat', 
+                  'capacity']].set_index('name')
 
-# Loading and processing of historical curves for the training dataset
-def _process_training_curves(X_tr_, assets_, T, path, file_name):
-
-    K = assets_.shape[0]
-
-    ac_tr_  = pd.read_csv(path + file_name)
-    ac_tr_  = ac_tr_.iloc[T:-T]
-    dates_  = ac_tr_[['Time']].to_numpy()
+# Loading and processing metadata
+def _process_solar_metadata(path, file_name):
     
-    # Consitent asset ordering
+    meta_ = pd.read_csv(path + file_name)
+    meta_ = meta_.rename(columns = {'latitude': 'lat', 
+                                    'longitude': 'lon', 
+                                    'site_ids': 'name', 
+                                    'AC_capacity_MW': 'capacity'})    
+    
+    return meta_[['name', 
+                  'lon', 
+                  'lat', 
+                  'capacity']].set_index('name')
+    
+# Loading and processing of historical curves for the training dataset
+def _process_training_curves(X_tr_, assets_, T, path, file_name, TZ = -6):
+    
+    ac_tr_ = pd.read_csv(path + file_name)
+    ac_tr_ = ac_tr_.iloc[T - TZ*12:-(T + TZ*12)]    
+    dates_ = ac_tr_[['Time']].to_numpy()
+    
+    # Consistent asset ordering
     ac_tr_ = ac_tr_[assets_].to_numpy()
-    print(ac_tr_.shape)
 
     F_tr_     = []
     dates_tr_ = []
@@ -62,26 +76,24 @@ def _process_training_curves(X_tr_, assets_, T, path, file_name):
     return F_tr_, T_tr_, x_tr_, p_
 
 # Loading and processing of historical curves for the testing dataset
-def _process_testing_curves(X_ts_, assets_, p_, T, path, file_name):
-
-    K = assets_.shape[0]
+def _process_testing_curves(X_ts_, assets_, p_, T, path, file_name, TZ = -6):
 
     ac_ts_ = pd.read_csv(path + file_name)
+    ac_ts_ = ac_ts_.iloc[T - TZ*12:-(T + TZ*12)]
     dates_ = ac_ts_[['Time']].to_numpy()
     
-    # Consitent asset ordering
+    # Consistent asset ordering
     ac_ts_ = ac_ts_[assets_].to_numpy()
-    print(dates_.shape, ac_ts_.shape)
+    #print(dates_.shape, ac_ts_.shape)
 
     # Format random curves and dates
     dates_ts_ = dates_.reshape(int(dates_.shape[0]/T), T)
     F_ts_     = ac_ts_.reshape(int(ac_ts_.shape[0]/T), T, ac_ts_.shape[1])
-    #print(dates_ts_.shape, F_ts_.shape)
 
     # Normalized between 0 and 1 by Max Power
     for i in range(p_.shape[0]):
         F_ts_[..., i] /= p_[i]
-    print(F_ts_.min(), F_ts_.max())
+    #print(F_ts_.min(), F_ts_.max())
 
     # Asset coordiantes
     x_ts_ = X_ts_.copy()
@@ -92,16 +104,14 @@ def _process_testing_curves(X_ts_, assets_, p_, T, path, file_name):
     return F_ts_, T_ts_, x_ts_
 
 # Loading and processing of historical day-ahead forecast for the training dataset
-def _process_traning_forecasts(assets_, p_, T, path, file_name):
+def _process_traning_forecasts(assets_, p_, T, path, file_name, TZ = -6):
     
-    K = assets_.shape[0]
-
     fc_ = pd.read_csv(path + file_name)
     
     # Correct time zone in the forecast
-    TZ_fc = 5
+
     fc_['Forecast_time'] = fc_['Forecast_time'].apply(lambda x: datetime.datetime.strptime(x, '%Y-%m-%d %H:%M:%S') 
-                                                      - datetime.timedelta(hours = TZ_fc + 0.5))
+                                                      - datetime.timedelta(hours = -TZ + 0.5))
     
     # Consitent asset ordering
     fc_ = fc_[assets_].to_numpy()
@@ -110,7 +120,7 @@ def _process_traning_forecasts(assets_, p_, T, path, file_name):
     E_tr_ = []
     x_fc_ = (np.linspace(0, fc_.shape[0] - 1, fc_.shape[0]) + .5)*12
     x_ac_ = np.linspace(0, fc_.shape[0]*12 - 1, fc_.shape[0]*12)
-    for k in range(K):
+    for k in range(assets_.shape[0]):
         fc_tr_ = interpolate.interp1d(x_fc_, fc_[:, k], kind       = 'nearest-up', 
                                                         fill_value = "extrapolate")(x_ac_)
         E_tr_.append(fc_tr_.reshape(int(fc_tr_.shape[0]/T), T)[..., np.newaxis])
@@ -128,16 +138,13 @@ def _process_traning_forecasts(assets_, p_, T, path, file_name):
     return np.concatenate([E_tr_[..., i] for i in range(p_.shape[0])], axis = 0)
 
 # Loading and processing of historical day-ahead forecast for the testing dataset
-def _process_testing_forecasts(assets_, p_, T, path, file_name):
-
-    K = assets_.shape[0]
+def _process_testing_forecasts(assets_, p_, T, path, file_name, TZ = -6):
 
     fc_ = pd.read_csv(path + file_name, index_col = None)
     
     # Correct time zone in the forecast
-    TZ_fc = 6
     fc_['horizon_time'] = fc_['horizon_time'].apply(lambda x: datetime.datetime.strptime(x, '%m/%d/%y %H:%M') - 
-                                                    datetime.timedelta(hours = TZ_fc + 0.5))
+                                                    datetime.timedelta(hours = -TZ + 0.5))
     
     # Consitent asset ordering
     fc_ = fc_[assets_].to_numpy()
@@ -146,7 +153,7 @@ def _process_testing_forecasts(assets_, p_, T, path, file_name):
     E_ts_ = []
     x_fc_ = (np.linspace(0, fc_.shape[0] - 1, fc_.shape[0]) + .5)*12
     x_ac_ = np.linspace(0, fc_.shape[0]*12 - 1, fc_.shape[0]*12)
-    for k in range(K):
+    for k in range(assets_.shape[0]):
         fc_ts_ = interpolate.interp1d(x_fc_, fc_[:, k], kind       = 'nearest-up', 
                                                         fill_value = "extrapolate")(x_ac_)
         E_ts_.append(fc_ts_.reshape(int(fc_ts_.shape[0]/T), T)[..., np.newaxis])
@@ -159,6 +166,6 @@ def _process_testing_forecasts(assets_, p_, T, path, file_name):
     # Regularized so unfeaseble capacity factors does not appear
     E_ts_[E_ts_ > 1.] = 1.
     E_ts_[E_ts_ < 0.] = 0.
-    print(E_ts_.min(), E_ts_.max())
+    #print(E_ts_.min(), E_ts_.max())
 
     return E_ts_
