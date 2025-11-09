@@ -7,17 +7,21 @@ import pickle as pkl
 from itertools import product
 from mpi4py import MPI
 
-from ffc_utils import _fknn_forecast_dynamic_update
+from skfda.exploratory.depth import ModifiedBandDepth
 
-from functional_utils import _confidence_intervals_from_eCDF
+from ffc_utils import (_fknn_forecast_dynamic_update,
+                       _functional_downsampling, 
+                       _focal_curve_envelope, 
+                       _functional_confidence_band)
+
 
 from scores_utils import (_empirical_coverage_score,
-                          _weighted_empirical_interval_score)
+                          _empirical_interval_score)
 
-path_to_fDepth     = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
-path_to_data       = '/home/gterren/dynamic_update/data'
-path_to_validation = '/home/gterren/dynamic_update/validation'
-path_to_param      = '/home/gterren/dynamic_update/params'
+path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
+path_to_data   = '/home/gterren/dynamic_update/data'
+path_to_test   = '/home/gterren/dynamic_update/test'
+path_to_param  = '/home/gterren/dynamic_update/params'
 
 def _save_validation_csv(df_new_, path_to_file):
 
@@ -65,13 +69,11 @@ i_job, N_jobs, _comm = _get_node_info()
 # Calibration experiments setup
 resource = sys.argv[1]
 method   = sys.argv[2] 
-param    = sys.argv[3] 
-time     = int(sys.argv[4])
+time     = int(sys.argv[3])
+dist     = int(sys.argv[4])
 
 # Assets in the calibration experiments
-assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-# Significance levels for the confidence intervals
-alpha_ = [0.1, 0.2, 0.3, 0.4]
+assets_ = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
 
 T = 288
 # Load 2017 data as training set
@@ -218,157 +220,93 @@ t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetupl
 hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}_params.csv',  index_col = 0)
 hyper_.columns = hyper_.columns.astype(int)
 
-# Hyperparameters for the functional forecast dynamic update:
-forget_rate_f_  = [hyper_.loc['forget_rate_f'][time]]
-forget_rate_e_  = [hyper_.loc['forget_rate_e'][time]]
-lookup_rate_    = [hyper_.loc['lookup_rate'][time]]
-length_scale_f_ = [hyper_.loc['length_scale_f'][time]]   
-length_scale_e_ = [hyper_.loc['length_scale_e'][time]]
-trust_rate_     = [hyper_.loc['trust_rate'][time]]
-nu_             = [hyper_.loc['nu'][time]]
-xi_             = [hyper_.loc['xi'][time]]
-gamma_          = [hyper_.loc['gamma'][time]]
-kappa_min_      = [hyper_.loc['kappa_min'][time]]
-kappa_max_      = [hyper_.loc['kappa_max'][time]]
+envelop_         = pd.read_csv(path_to_param + f'/{resource}-{method}_envelop.csv',  index_col = 0)
+envelop_.columns = envelop_.columns.astype(int)
 
-if param == 'forget_rate_f':
-    forget_rate_f_ = [0.0625, 0.125, 0.25, 0.5, 1., 2., 3., 4., 5., 6., 7., 8.]
-
-if param == 'forget_rate_e':
-    forget_rate_e_ =  [0.25, 0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512.]
-
-if param == 'length_scale_f':
-    length_scale_f_ = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5]
-
-if param == 'length_scale_e':
-    length_scale_e_ = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5]
-
-if param == 'lookup_rate':
-    lookup_rate_ = [0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1028]
-
-if param == 'trust_rate':
-    trust_rate_ = [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.]
-
-if param == 'nu':
-    nu_ = [1., 2., 3, 4., 5, 6., 8., 10., 12., 14., 16., 18]
-
-if param == 'gamma':
-    gamma_ = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
-
-if param == 'xi':
-    xi_ = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.975, 0.99]
-
-if param == 'kappa_min':
-    kappa_min_ = [25, 40, 55, 70, 85, 100, 125, 150, 175, 200, 225, 250]
-
-if param == 'kappa_max':
-    kappa_max_ = [100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500, 1750]
-
-print(i_job, resource, param)
-
-params_ = tuple(product(forget_rate_f_, 
-                        forget_rate_e_, 
-                        length_scale_f_,
-                        length_scale_e_,
-                        lookup_rate_, 
-                        trust_rate_, 
-                        nu_,
-                        gamma_,
-                        xi_, 
-                        kappa_min_, 
-                        kappa_max_))[i_job]
-print(params_)
+fraction = envelop_.loc['fraction'][time]
+alpha    = envelop_.loc['alpha'][time]
 
 dfs_ = []
-try:
-    for asset in assets_:
-        for day in range(363):
-            #t1 = datetime.datetime.now()
+asset = assets_[i_job]
+for day in range(363):
+    #t1 = datetime.datetime.now()
 
-            file_name = f'{asset}-{day}-{time}'
-            #print(i_job, file_name)
+    try:
+        file_name = f'{asset}-{day}-{time}'
+        #print(i_job, file_name)
 
-            # Get functional predictors for a given test
-            f_     = F_ts_[day, :time, asset]
-            e_lin_ = E_ts_lin_[day, :, asset]
-            e_     = E_ts_[day, :, asset]
-            x_     = x_ts_[asset, :]
-            t      = t_ts_[day]
-            f_hat_ = F_ts_[day, time:, asset]
+        f_     = F_ts_[day, :time, asset]
+        e_lin_ = E_ts_lin_[day, :, asset]
+        e_     = E_ts_[day, :, asset]
+        x_     = x_ts_[asset, :]
+        t      = t_ts_[day]
+        f_hat_ = F_ts_[day, time:, asset]
 
-            # Get time constants
-            tau_ = dt_[:time]
-            s_   = dt_[time:]
+        # Filter solar hours with loading solar set
+        idx_days_  = np.absolute(t_tr_ - day) < 7
+        idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
+                    + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
 
-            # Filter solar hours with loading solar set
-            idx_days_  = np.absolute(t_tr_ - day) < 7
-            idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
-                        + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
-            
-            _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                      forget_rate_f  = params_[0],
-                                                      forget_rate_e  = params_[1],
-                                                      length_scale_f = params_[2],
-                                                      length_scale_e = params_[3],
-                                                      lookup_rate    = params_[4],
-                                                      trust_rate     = params_[5],
-                                                      nu             = params_[6],
-                                                      gamma          = params_[7],
-                                                      xi             = params_[8],
-                                                      kappa_min      = params_[9],
-                                                      kappa_max      = params_[10], 
-                                                      idx_hours_     = idx_hours_)
+        _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
+                                                  forget_rate_f  = hyper_.loc['forget_rate_f'][time],
+                                                  forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                  length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                  length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                  lookup_rate    = hyper_.loc['lookup_rate'][time],
+                                                  trust_rate     = hyper_.loc['trust_rate'][time],
+                                                  nu             = hyper_.loc['nu'][time],
+                                                  gamma          = hyper_.loc['gamma'][time],
+                                                  xi             = hyper_.loc['xi'][time],
+                                                  kappa_min      = hyper_.loc['kappa_min'][time],
+                                                  kappa_max      = hyper_.loc['kappa_max'][time], 
+                                                  idx_hours_     = idx_hours_)
 
-            f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
-            f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
+        f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
+        f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
 
-            # Calculate functional confidence bands
-            m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_)
+        m_0_ = np.ones(_meta['m_0'].shape)*f_[-1]
+        M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, m_0_, dt_,
+                                                                  subsample = 12,
+                                                                  n_basis   = int(M_.shape[1]/4)) 
 
-            WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
-            WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
+        if dist == 'fknn':
+            dist_ = _meta['w'][_meta['idx_4']]
+        else:
+            dist_ = dist
 
-            # Save results
-            dfs_.append(list(params_ + tuple([time, 
-                                              asset, 
-                                              day,
-                                              param,
-                                              x_[0], 
-                                              x_[1],
-                                              M_.shape[0], 
-                                              float(WIS_e), 
-                                              float(WIS_f), 
-                                              float(f_tau_rmse), 
-                                              float(f_s_rmse)])))
+        J_ = _focal_curve_envelope(ModifiedBandDepth(), 
+                                   Y_       = M_interp_.T, 
+                                   dt_      = dt_[-M_interp_.shape[1]:], 
+                                   dist_    = dist_,
+                                   max_iter = 100).T
 
-except:
-    print(params_, i_job, file_name)
+        k = int(fraction*M_.shape[0])
 
-print(i_job, sys.argv[1], sys.argv[2], resource, datetime.datetime.now())
+        m_, u_, l_ = _functional_confidence_band(J_, k)
 
-dfs_ = pd.DataFrame(dfs_, columns = ['forget_rate_f', 
-                                     'forget_rate_e', 
-                                     'length_scale_f',
-                                     'length_scale_e', 
-                                     'lookup_rate', 
-                                     'trust_rate',
-                                     'nu', 
-                                     'gamma', 
-                                     'xi',
-                                     'kappa_min',
-                                     'kappa_max',
-                                     'time', 
+        WIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
+        FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
+
+        # Save results
+        dfs_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], WIS, FCS])
+
+    except:
+        print(i_job, file_name)
+
+print(i_job, resource, method)
+
+dfs_ = pd.DataFrame(dfs_, columns = ['time', 
                                      'asset', 
                                      'day', 
-                                     'parameter',
-                                     'lon',
-                                     'lat',
-                                     'n_scenarios', 
-                                     'WIS_e', 
-                                     'WIS_f', 
-                                     'RMSE_tau', 
-                                     'RMSE_s'])
+                                     'alpha', 
+                                     'k', 
+                                     'fraction', 
+                                     'distance',
+                                     'n_scen', 
+                                     'n_scen_evenlop', 
+                                     'WIS', 
+                                     'FCS'])
 
 dfs_ = _gather_node_data(_comm, dfs_)
 
-_save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-validation_ffc.csv')
+_save_validation_csv(dfs_, path_to_file = path_to_test + f'/{resource}-{method}-test_envelop.csv')

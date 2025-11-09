@@ -187,7 +187,7 @@ def _scenario_filtering(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
 
     if idx_neigbors_.shape[0] < kappa_min:
         # Increase similarity threshold
-        idx_final_ = idx_[w_ >= np.sort(w_)[::-1][kappa_min - 1]]
+        idx_final_ = idx_[w_ >= np.sort(w_)[::-1][kappa_min]]
         
     return w_, idx_neigbors_, idx_temporal_, idx_spatial_, idx_final_, sigma
 
