@@ -10,7 +10,7 @@ from mpi4py import MPI
 from ffc_utils import _fknn_forecast_dynamic_update
 
 
-from functional_utils import _confidence_intervals_from_eCDF
+from functional_utils import _confidence_bands_from_eCDF
 
 from scores_utils import (_empirical_coverage_score,
                           _weighted_empirical_interval_score)
@@ -62,6 +62,7 @@ def _get_node_info(verbose = False):
 # MPI job variables
 #i_job, N_jobs, _comm = _get_node_info()
 i_job = 0
+
 # Calibration experiments setup
 resource = sys.argv[1]
 method   = sys.argv[2] 
@@ -262,15 +263,24 @@ for day in range(363):
     f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
     f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
 
-    # Calculate marginal empirical confidence intervals
-    m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_)
+    # Confidence bands from marginal empirical density function
+    m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
 
     # Testing WIS
     WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
     WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
 
     # Save results
-    dfs_.append([time, asset, day, x_[0], x_[1], M_.shape[0], float(WIS_e), float(WIS_f), float(f_tau_rmse), float(f_s_rmse)])
+    dfs_.append([time, 
+                 asset, 
+                 day, 
+                 x_[0], 
+                 x_[1], 
+                 M_.shape[0], 
+                 float(WIS_e), 
+                 float(WIS_f), 
+                 float(f_tau_rmse), 
+                 float(f_s_rmse)])
 
 dfs_ = pd.DataFrame(dfs_, columns = ['time', 
                                      'asset', 

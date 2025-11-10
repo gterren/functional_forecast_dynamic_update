@@ -9,7 +9,7 @@ from mpi4py import MPI
 
 from ffc_utils import _fknn_forecast_dynamic_update
 
-from functional_utils import _confidence_intervals_from_eCDF
+from functional_utils import _confidence_bands_from_eCDF
 
 from scores_utils import (_empirical_coverage_score,
                           _weighted_empirical_interval_score)
@@ -26,10 +26,13 @@ def _save_validation_csv(df_new_, path_to_file):
         # Check if the CSV exists
         if os.path.exists(path_to_file):
 
-            df_existing_ = pd.read_csv(path_to_file)
-            df_new_      = pd.concat([df_existing_, 
-                                      df_new_], 
-                                      ignore_index = True).reset_index(drop = True)
+            df_existing_ = pd.read_csv(path_to_file,
+                                       engine="python",
+                                       on_bad_lines="warn")
+            
+            df_new_ = pd.concat([df_existing_,
+                                 df_new_],
+                                ignore_index = True).reset_index(drop = True)
 
         # Overwrite the CSV with the updated data
         df_new_.to_csv(path_to_file, index = False)
@@ -322,8 +325,8 @@ try:
             f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
             f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
 
-            # Calculate functional confidence bands
-            m_, _upper, _lower = _confidence_intervals_from_eCDF(M_, alpha_)
+            # Confidence bands from marginal empirical density function
+            m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
 
             WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
             WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))

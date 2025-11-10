@@ -70,13 +70,13 @@ i_job, N_jobs, _comm = _get_node_info()
 resource = sys.argv[1]
 method   = sys.argv[2] 
 i_alpha  = int(sys.argv[3])
-time     = int(sys.argv[4])
-dist     = int(sys.argv[5])
+dist     = int(sys.argv[4])
+time     = int(sys.argv[5])
 
 # Assets in the calibration experiments
 assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 # Significance levels for the confidence intervals
-alpha_ = [[0.1, 0.2, 0.3, 0.4][i_alpha]]
+alpha = [0.1, 0.2, 0.3, 0.4][i_alpha]
 
 T = 288
 # Load 2017 data as training set
@@ -223,8 +223,7 @@ t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetupl
 hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}_params.csv',  index_col = 0)
 hyper_.columns = hyper_.columns.astype(int)
 
-fraction_ = [0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.975]
-params_   = tuple(product(alpha_, fraction_))[i_job]
+fraction = [0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.975][i_job]
 
 dfs_ = []
 for asset in assets_:
@@ -281,19 +280,18 @@ for asset in assets_:
                                        dist_    = dist_,
                                        max_iter = 100).T
 
-            alpha = params_[0]
-            k     = int(params_[1]*M_.shape[0])
+            k = int(fraction*M_.shape[0])
 
             m_, u_, l_ = _functional_confidence_band(J_, k)
 
-            WIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
+            FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
             FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
 
             # Save results
-            dfs_.append([time, asset, day, alpha, k, params_[1], dist, M_.shape[0], J_.shape[0], WIS, FCS])
+            dfs_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS, FCS])
 
         except:
-            print(params_, i_job, file_name)
+            print(alpha, fraction, i_job, file_name)
 
 print(i_job, resource, method)
 

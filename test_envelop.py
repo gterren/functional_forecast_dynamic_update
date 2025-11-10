@@ -69,11 +69,14 @@ i_job, N_jobs, _comm = _get_node_info()
 # Calibration experiments setup
 resource = sys.argv[1]
 method   = sys.argv[2] 
-time     = int(sys.argv[3])
+i_alpha  = int(sys.argv[3])
 dist     = int(sys.argv[4])
+time     = int(sys.argv[5])
 
 # Assets in the calibration experiments
 assets_ = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+# Significance levels for the confidence intervals
+alpha = [[0.1, 0.2, 0.3, 0.4][i_alpha]]
 
 T = 288
 # Load 2017 data as training set
@@ -129,8 +132,7 @@ E_ts_[E_ts_ < 0.] = 0.
 
 # Format training set from day x interval x asset to [day * asset] x interval
 E_ts_lin_ = E_ts_.copy()
-E_tr_lin_ = np.concatenate([E_tr_[..., k] 
-                            for k in range(E_tr_.shape[2])], axis = 0)
+E_tr_lin_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
 #print(E_tr_lin_.shape, E_ts_lin_.shape)
 
 # Load 2017 data as training set
@@ -223,8 +225,7 @@ hyper_.columns = hyper_.columns.astype(int)
 envelop_         = pd.read_csv(path_to_param + f'/{resource}-{method}_envelop.csv',  index_col = 0)
 envelop_.columns = envelop_.columns.astype(int)
 
-fraction = envelop_.loc['fraction'][time]
-alpha    = envelop_.loc['alpha'][time]
+fraction = envelop_.loc[((envelop_['alpha'] == alpha) & (envelop_['inverval'] == time)), 'fraction'].to_numpy()[0]
 
 dfs_ = []
 asset = assets_[i_job]
@@ -284,11 +285,21 @@ for day in range(363):
 
         m_, u_, l_ = _functional_confidence_band(J_, k)
 
-        WIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
+        FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
         FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
 
         # Save results
-        dfs_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], WIS, FCS])
+        dfs_.append([time, 
+                     asset, 
+                     day, 
+                     alpha, 
+                     k, 
+                     fraction, 
+                     dist, 
+                     M_.shape[0], 
+                     J_.shape[0], 
+                     FIS, 
+                     FCS])
 
     except:
         print(i_job, file_name)

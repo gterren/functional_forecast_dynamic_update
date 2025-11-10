@@ -2,13 +2,8 @@ import subprocess
 
 import pandas as pd
 import numpy as np
-from scipy.stats import rankdata
 
 from statsmodels.distributions.empirical_distribution import ECDF
-
-# path_to_fPCA   = '/Users/Guille/Desktop/dynamic_update/software/fPCA'
-# path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth'
-# path_to_data   = '/Users/Guille/Desktop/dynamic_update/data'
 
 # Fit Functional PCA
 def _fPCA_fit(X_, path):
@@ -117,19 +112,6 @@ def _fDepth(X_, depth, path):
     # Read output data
     return pd.read_csv(path + '/fDepth.csv', index_col = None)
 
-# Functional Quantiles 
-def _fQuantile(X_, path):
-    
-    # Save input data
-    pd.DataFrame(X_).to_csv(path + '/curves.csv', header = False, index = False)
-
-    # Directional Quantile .R routine
-    subprocess.call(['Rscript', path + '/fDepth_DQ_multi-quantile.R'], 
-                    stdout = subprocess.DEVNULL, 
-                    stderr = subprocess.STDOUT)
-
-    # Read output data
-    return pd.read_csv(path + '/fDepth.csv', index_col = None)
 
 def _eQuantile(_eCDF, q_):
     """
@@ -146,57 +128,91 @@ def _eQuantile(_eCDF, q_):
 
     return np.array([_eCDF.x[np.searchsorted(_eCDF.y, q)] for q in q_])
 
-# Derive confidence intervals from Directional Quantiles
-def _confidence_intervals_from_DQ(M_, alpha_):    
-    _y_pred_upper = {}
-    _y_pred_lower = {}
-    for i in range(len(alpha_)):
-        # Calculate functional Directional Quantiles (DQ)
-        DQ_ = _directional_quantile(M_, 
-                                    q_lower = alpha_[i]/2., 
-                                    q_upper = 1. - alpha_[i]/2.)
-        I_  = np.argsort(DQ_)[::-1]
+
+# Confidence bands from a functional depth metric
+def _confidence_bands_from_fDepth(M_, D_, alpha_):
+
+    # Rank curves by depth metric
+    I_ = np.argsort(D_)[::-1]
     
-        scen_                         = M_[I_[int(M_.shape[0] * alpha_[i]):],]
-        _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
-        _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
-
-    m_ = np.median(M_, axis = 0)
-    
-    return m_, _y_pred_upper, _y_pred_lower
-
-# Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_eCDF(M_, alpha_):    
-
-    _y_pred_upper = {}
-    _y_pred_lower = {}
+    _U = {}
+    _L = {}
     for i in range(len(alpha_)):
+        scenarios_         = M_[I_[:-int(M_.shape[0] * alpha_[i])],]
+        _U[f'{alpha_[i]}'] = np.max(scenarios_, axis = 0)
+        _L[f'{alpha_[i]}'] = np.min(scenarios_, axis = 0)
+    
+    # Deepest curve
+    m_ = M_[I_[0],]
 
-        _y_pred_lower[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [alpha_[i]/2.])
-                                                  for j in range(M_.shape[1])])[:, 0]
-        _y_pred_upper[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - alpha_[i]/2.])
-                                                  for j in range(M_.shape[1])])[:, 0]
+    return m_, _U, _L
 
+# Confidence bands from marginal empirical density function
+def _confidence_bands_from_eCDF(M_, alpha_):    
+
+    _U = {}
+    _L = {}
+    for i in range(len(alpha_)):
+        _U[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [alpha_[i]/2.]) for j in range(M_.shape[1])])[:, 0]
+        _L[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - alpha_[i]/2.])  for j in range(M_.shape[1])])[:, 0]
+    
+    # Median curve
     m_ = np.median(M_, axis = 0)
 
-    return m_, _y_pred_upper, _y_pred_lower
+    return m_, _U, _L
 
-# # Derive confidence intervals from a functional depth metric
-# def _confidence_intervals_from_MBD(M_, alpha_, zeta_):
+# Confidence bands from focal-curve envelop
+def _confidence_bands_from_focal_envelop(J_, alpha_, k_):    
 
-#     # Calculate Modified Band Depth ranking
-#     MBD_ = _modified_band_depth(M_)
-#     I_   = np.argsort(MBD_)
-#     _y_pred_upper = {}
-#     _y_pred_lower = {}
-#     for i in range(len(alpha_)):
-#         scen_                         =  M_[I_[int(M_.shape[0] * zeta_[i]):],]
-#         _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
-#         _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)
+    _U = {}
+    _L = {}
+    for i in range(len(alpha_)):
+        _U[f'{alpha_[i]}'] = np.max(J_[:, :k_[i]], axis = 1)
+        _L[f'{alpha_[i]}'] = np.min(J_[:, :k_[i]], axis = 1)
 
-#     m_ = np.median(M_, axis = 0)
+    # Focal-curve
+    m_ = J_[:, 0]
 
-#     return m_, _y_pred_upper, _y_pred_lower
+    return m_, _L, _U
+
+# Confidence bands from focal-curve envelop
+def _confidence_bands_from_focal_envelop(J_, alpha_, k_):    
+
+    _U = {}
+    _L = {}
+    for i in range(len(alpha_)):
+        _U[f'{alpha_[i]}'] = np.max(J_[:, :k_[i]], axis = 1)
+        _L[f'{alpha_[i]}'] = np.min(J_[:, :k_[i]], axis = 1)
+
+    # Focal-curve
+    m_ = J_[:, 0]
+
+    return m_, _L, _U
+    
+# Functional boxplot from a smooth functional depth metric
+def _functional_boxplot(M_downsampled_, 
+                        M_upsampled_,
+                        alpha_, 
+                        depth, 
+                        path):
+
+    # Calculate functional depth ranking
+    D_ = _fDepth(M_downsampled_, depth, path).to_numpy()[:, 0]
+
+    I_ = np.argsort(D_)[::-1]
+
+    _U = {}
+    _L = {}
+    for i in range(len(alpha_)):
+        scenarios_         = M_upsampled_[I_[:-int(M_upsampled_.shape[0] * alpha_[i])],]
+        _U[f'{alpha_[i]}'] = np.max(scenarios_, axis = 0)
+        _L[f'{alpha_[i]}'] = np.min(scenarios_, axis = 0)
+
+    m_        = M_upsampled_[I_[0],]
+    _U['max'] = np.max(M_upsampled_, axis = 0)
+    _L['min'] = np.min(M_upsampled_, axis = 0)
+
+    return m_, _U, _L
 
 # X_tr_ = pd.DataFrame(scs_)
 # X_ts_ = pd.DataFrame(scs_[:11, :])
