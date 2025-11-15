@@ -1,7 +1,9 @@
 #!/bin/bash -l
-#SBATCH --job-name=wind-observations-validate_ffc
+##SBATCH --job-name=solar-observation-validate_ffc
+#SBATCH --job-name=solar-observation-test_ffc
+##SBATCH --job-name=wind-fusion-envelop_ffc
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=12
+#SBATCH --ntasks-per-node=20
 #SBATCH --time=24:00:00
 #SBATCH -p batch
 ##SBATCH --mem=187G
@@ -13,8 +15,8 @@
 cd /home/gterren/dynamic_update/functional_forecast_dynamic_update
 source activate fda
 
-mpirun -np 12 python validate_ffc.py wind observation $1 $2
-#mpirun -np 20 python test_ffc.py wind fusion $1
+#mpirun -np 12 python validate_ffc.py solar observation $1 $2
+mpirun -np 20 python test_ffc.py solar observation $1
 
 #mpirun -np 12 python validate_envelop.py wind fusion $1 $2 $3
 #mpirun -np 20 python test_envelop.py wind fusion $1 $2 $3

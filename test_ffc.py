@@ -1,4 +1,4 @@
-import os, datetime, sys, time
+import os, datetime, sys, time, traceback
 
 import pandas as pd
 import numpy as np
@@ -60,8 +60,7 @@ def _get_node_info(verbose = False):
     return int(rank), int(size), comm
 
 # MPI job variables
-#i_job, N_jobs, _comm = _get_node_info()
-i_job = 0
+i_job, N_jobs, _comm = _get_node_info()
 
 # Calibration experiments setup
 resource = sys.argv[1]
@@ -215,72 +214,80 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}_params.csv',  index_col = 0)
+hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_init.csv')
+hyper_         = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
+print(hyper_)
 
 # Test setup
 dfs_ = []
 asset = assets_[i_job]
 for day in range(363):
-    print(f'{asset}-{day}-{time}')
+    file_name = f'{asset}-{day}-{time}'
+    print(i_job, file_name)
 
-    # Get functional predictors for a given test
-    f_     = F_ts_[day, :time, asset]
-    e_lin_ = E_ts_lin_[day, :, asset]
-    e_     = E_ts_[day, :, asset]
-    x_     = x_ts_[asset, :]
-    t      = t_ts_[day]
-    f_hat_ = F_ts_[day, time:, asset]
+    try:
 
-    # Get time constants
-    tau_ = dt_[:time]
-    s_   = dt_[time:]
+        # Get functional predictors for a given test
+        f_     = F_ts_[day, :time, asset]
+        e_lin_ = E_ts_lin_[day, :, asset]
+        e_     = E_ts_[day, :, asset]
+        x_     = x_ts_[asset, :]
+        t      = t_ts_[day]
+        f_hat_ = F_ts_[day, time:, asset]
 
-    t1 = datetime.datetime.now()
+        # Get time constants
+        tau_ = dt_[:time]
+        s_   = dt_[time:]
 
-    # Filter solar hours with loading solar set
-    idx_days_  = np.absolute(t_tr_ - day) < 7
-    idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
-                + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
-    
-    _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                              forget_rate_f  = hyper_.loc['forget_rate_f'][time],
-                                              forget_rate_e  = hyper_.loc['forget_rate_e'][time],
-                                              length_scale_f = hyper_.loc['length_scale_f'][time],
-                                              length_scale_e = hyper_.loc['length_scale_e'][time],
-                                              lookup_rate    = hyper_.loc['lookup_rate'][time],
-                                              trust_rate     = hyper_.loc['trust_rate'][time],
-                                              nu             = hyper_.loc['nu'][time],
-                                              gamma          = hyper_.loc['gamma'][time],
-                                              xi             = hyper_.loc['xi'][time],
-                                              kappa_min      = hyper_.loc['kappa_min'][time],
-                                              kappa_max      = hyper_.loc['kappa_max'][time], 
-                                              idx_hours_     = idx_hours_)
+        t1 = datetime.datetime.now()
 
-    t2 = datetime.datetime.now()
-    print(t2 - t1)
+        # Filter solar hours with loading solar set
+        idx_days_  = np.absolute(t_tr_ - day) < 7
+        idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
+                    + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
+        
+        _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
+                                                forget_rate_f  = hyper_.loc['forget_rate_f'][time],
+                                                forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                lookup_rate    = hyper_.loc['lookup_rate'][time],
+                                                trust_rate     = hyper_.loc['trust_rate'][time],
+                                                nu             = hyper_.loc['nu'][time],
+                                                gamma          = hyper_.loc['gamma'][time],
+                                                xi             = hyper_.loc['xi'][time],
+                                                kappa_min      = hyper_.loc['kappa_min'][time],
+                                                kappa_max      = hyper_.loc['kappa_max'][time], 
+                                                idx_hours_     = idx_hours_)
 
-    f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
-    f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
+        f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
+        f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
 
-    # Confidence bands from marginal empirical density function
-    m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
+        # Confidence bands from marginal empirical density function
+        m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
 
-    # Testing WIS
-    WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
-    WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
+        # Testing WIS
+        WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
+        WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
 
-    # Save results
-    dfs_.append([time, 
-                 asset, 
-                 day, 
-                 x_[0], 
-                 x_[1], 
-                 M_.shape[0], 
-                 float(WIS_e), 
-                 float(WIS_f), 
-                 float(f_tau_rmse), 
-                 float(f_s_rmse)])
+        # Save results
+        dfs_.append([time, 
+                    asset, 
+                    day, 
+                    x_[0], 
+                    x_[1], 
+                    M_.shape[0], 
+                    float(WIS_e), 
+                    float(WIS_f), 
+                    float(f_tau_rmse), 
+                    float(f_s_rmse)])
+        
+    except Exception as e:
+        print(f"Error for asset={asset}, day={day}, file={file_name}")
+        print(f"Exception: {e}")
+        traceback.print_exc()
+        # loop continues automatically
 
 dfs_ = pd.DataFrame(dfs_, columns = ['time', 
                                      'asset', 

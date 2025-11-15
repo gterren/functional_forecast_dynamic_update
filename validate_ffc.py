@@ -1,4 +1,4 @@
-import os, datetime, sys, time
+import os, datetime, sys, time, traceback
 
 import pandas as pd
 import numpy as np
@@ -25,14 +25,15 @@ def _save_validation_csv(df_new_, path_to_file):
 
         # Check if the CSV exists
         if os.path.exists(path_to_file):
-
+            
+            # Read the data and append the new data
             df_existing_ = pd.read_csv(path_to_file,
-                                       engine="python",
-                                       on_bad_lines="warn")
+                                    engine="python",
+                                    on_bad_lines="warn")
             
             df_new_ = pd.concat([df_existing_,
-                                 df_new_],
-                                ignore_index = True).reset_index(drop = True)
+                                    df_new_],
+                                    ignore_index = True).reset_index(drop = True)
 
         # Overwrite the CSV with the updated data
         df_new_.to_csv(path_to_file, index = False)
@@ -218,8 +219,10 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}_params.csv',  index_col = 0)
+hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_init.csv')
+hyper_         = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
+print(hyper_)
 
 # Hyperparameters for the functional forecast dynamic update:
 forget_rate_f_  = [hyper_.loc['forget_rate_f'][time]]
@@ -280,16 +283,16 @@ params_ = tuple(product(forget_rate_f_,
                         xi_, 
                         kappa_min_, 
                         kappa_max_))[i_job]
-print(params_)
+#print(params_)
 
 dfs_ = []
-try:
-    for asset in assets_:
-        for day in range(363):
-            #t1 = datetime.datetime.now()
+for asset in assets_:
+    for day in range(363):
 
-            file_name = f'{asset}-{day}-{time}'
-            #print(i_job, file_name)
+        file_name = f'{asset}-{day}-{time}'
+        #print(i_job, file_name)
+
+        try:
 
             # Get functional predictors for a given test
             f_     = F_ts_[day, :time, asset]
@@ -309,18 +312,18 @@ try:
                         + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
             
             _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                      forget_rate_f  = params_[0],
-                                                      forget_rate_e  = params_[1],
-                                                      length_scale_f = params_[2],
-                                                      length_scale_e = params_[3],
-                                                      lookup_rate    = params_[4],
-                                                      trust_rate     = params_[5],
-                                                      nu             = params_[6],
-                                                      gamma          = params_[7],
-                                                      xi             = params_[8],
-                                                      kappa_min      = params_[9],
-                                                      kappa_max      = params_[10], 
-                                                      idx_hours_     = idx_hours_)
+                                                        forget_rate_f  = params_[0],
+                                                        forget_rate_e  = params_[1],
+                                                        length_scale_f = params_[2],
+                                                        length_scale_e = params_[3],
+                                                        lookup_rate    = params_[4],
+                                                        trust_rate     = params_[5],
+                                                        nu             = params_[6],
+                                                        gamma          = params_[7],
+                                                        xi             = params_[8],
+                                                        kappa_min      = params_[9],
+                                                        kappa_max      = params_[10], 
+                                                        idx_hours_     = idx_hours_)
 
             f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
             f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
@@ -328,26 +331,29 @@ try:
             # Confidence bands from marginal empirical density function
             m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
 
-            WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
             WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
+            WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
 
             # Save results
             dfs_.append(list(params_ + tuple([time, 
-                                              asset, 
-                                              day,
-                                              param,
-                                              x_[0], 
-                                              x_[1],
-                                              M_.shape[0], 
-                                              float(WIS_e), 
-                                              float(WIS_f), 
-                                              float(f_tau_rmse), 
-                                              float(f_s_rmse)])))
+                                                asset, 
+                                                day,
+                                                param,
+                                                x_[0], 
+                                                x_[1],
+                                                M_.shape[0], 
+                                                float(WIS_e), 
+                                                float(WIS_f), 
+                                                float(f_tau_rmse), 
+                                                float(f_s_rmse)])))
 
-except:
-    print(params_, i_job, file_name)
+        except Exception as e:
+            print(f"Error for asset={asset}, day={day}, file={file_name}")
+            print(f"Exception: {e}")
+            traceback.print_exc()
+            # loop continues automatically
 
-print(i_job, sys.argv[1], sys.argv[2], resource, datetime.datetime.now())
+#print(i_job, sys.argv[1], sys.argv[2], resource, datetime.datetime.now())
 
 dfs_ = pd.DataFrame(dfs_, columns = ['forget_rate_f', 
                                      'forget_rate_e', 
@@ -372,6 +378,8 @@ dfs_ = pd.DataFrame(dfs_, columns = ['forget_rate_f',
                                      'RMSE_tau', 
                                      'RMSE_s'])
 
+print(i_job, resource, param, dfs_.shape)
+
 dfs_ = _gather_node_data(_comm, dfs_)
 
-_save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-validation_ffc.csv')
+_save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc.csv')

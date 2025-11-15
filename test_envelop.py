@@ -11,12 +11,15 @@ from skfda.exploratory.depth import ModifiedBandDepth
 
 from ffc_utils import (_fknn_forecast_dynamic_update,
                        _functional_downsampling, 
-                       _focal_curve_envelope, 
+                       _focal_curve_envelope,
                        _functional_confidence_band)
 
 
-from scores_utils import (_empirical_coverage_score,
-                          _empirical_interval_score)
+from functional_utils import _confidence_bands_from_focal_envelop
+
+from scores_utils import (_weighted_empirical_interval_score,
+                          _empirical_interval_score,
+                          _empirical_coverage_score)
 
 path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
 path_to_data   = '/home/gterren/dynamic_update/data'
@@ -76,7 +79,7 @@ time     = int(sys.argv[5])
 # Assets in the calibration experiments
 assets_ = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
 # Significance levels for the confidence intervals
-alpha = [[0.1, 0.2, 0.3, 0.4][i_alpha]]
+alpha_ = [0.1, 0.2, 0.3, 0.4]
 
 T = 288
 # Load 2017 data as training set
@@ -225,7 +228,7 @@ hyper_.columns = hyper_.columns.astype(int)
 envelop_         = pd.read_csv(path_to_param + f'/{resource}-{method}_envelop.csv',  index_col = 0)
 envelop_.columns = envelop_.columns.astype(int)
 
-fraction = envelop_.loc[((envelop_['alpha'] == alpha) & (envelop_['inverval'] == time)), 'fraction'].to_numpy()[0]
+fractions_ = np.sort(envelop_.loc[envelop_['inverval'] == time, 'fraction'].to_numpy())[::-1]
 
 dfs_ = []
 asset = assets_[i_job]
@@ -281,25 +284,24 @@ for day in range(363):
                                    dist_    = dist_,
                                    max_iter = 100).T
 
-        k = int(fraction*M_.shape[0])
 
-        m_, u_, l_ = _functional_confidence_band(J_, k)
+        # Confidence bands from marginal empirical density function
+        k_                 = (fractions_*M_.shape[0]).astype(int)
+        m_, _upper, _lower = _confidence_bands_from_focal_envelop(J_, alpha_, k_)
 
-        FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
-        FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
+        # Testing WIS
+        WIS = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
 
+        # Testing FIS and FCS
+        FIS_ = []
+        FCS_ = []
+        for alpha, k in zip(alpha_, k_):
+            m_, u_, l_ = _functional_confidence_band(J_, k)
+            FIS_.append(_empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum())
+            FCS_.append(_empirical_coverage_score(f_hat_, l_[1:], u_[1:]))
+        
         # Save results
-        dfs_.append([time, 
-                     asset, 
-                     day, 
-                     alpha, 
-                     k, 
-                     fraction, 
-                     dist, 
-                     M_.shape[0], 
-                     J_.shape[0], 
-                     FIS, 
-                     FCS])
+        dfs_.append([time, asset, day, dist, M_.shape[0], J_.shape[0], WIS] + FIS_ + FCS_)
 
     except:
         print(i_job, file_name)
@@ -309,14 +311,18 @@ print(i_job, resource, method)
 dfs_ = pd.DataFrame(dfs_, columns = ['time', 
                                      'asset', 
                                      'day', 
-                                     'alpha', 
-                                     'k', 
-                                     'fraction', 
                                      'distance',
                                      'n_scen', 
                                      'n_scen_evenlop', 
                                      'WIS', 
-                                     'FCS'])
+                                     'FIS_1', 
+                                     'FIS_2', 
+                                     'FIS_3', 
+                                     'FIS_4',
+                                     'FCS_1',
+                                     'FCS_2', 
+                                     'FCS_3',
+                                     'FCS_4'])
 
 dfs_ = _gather_node_data(_comm, dfs_)
 
