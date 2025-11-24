@@ -25,19 +25,17 @@ path_to_param      = '/home/gterren/dynamic_update/params'
 
 def _save_validation_csv(df_new_, path_to_file):
 
-    if isinstance(df_new_, pd.DataFrame):
+    # Check if the CSV exists
+    if os.path.exists(path_to_file):
 
-        # Check if the CSV exists
-        if os.path.exists(path_to_file):
+        df_existing_ = pd.read_csv(path_to_file)
+        df_new_      = pd.concat([df_existing_, 
+                                    df_new_], 
+                                    ignore_index = True).reset_index(drop = True)
 
-            df_existing_ = pd.read_csv(path_to_file)
-            df_new_      = pd.concat([df_existing_, 
-                                      df_new_], 
-                                      ignore_index = True).reset_index(drop = True)
-
-        # Overwrite the CSV with the updated data
-        df_new_.to_csv(path_to_file, index = False)
-        print(path_to_file)
+    # Overwrite the CSV with the updated data
+    df_new_.to_csv(path_to_file, index = False)
+    print(path_to_file)
 
 # Gather data from all MPI nodes
 def _gather_node_data(_comm, df_):
@@ -64,18 +62,20 @@ def _get_node_info(verbose = False):
 
 # MPI job variables
 i_job, N_jobs, _comm = _get_node_info()
-#i_job = 0
+
 # Calibration experiments setup
 resource = sys.argv[1]
 method   = sys.argv[2] 
 dist     = sys.argv[3]
 time     = int(sys.argv[4])
-i_alpha  = int(sys.argv[5])
 
+# Validation set identifier
+val = 'iter_1'  
 # Assets in the calibration experiments
 assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 # Significance levels for the confidence intervals
-alpha = [0.1, 0.2, 0.3, 0.4][i_alpha]
+alpha_     = [0.1, 0.2, 0.3, 0.4]
+fractions_ = [0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.975]
 
 T = 288
 # Load 2017 data as training set
@@ -219,85 +219,90 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_val.csv')
+hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_{val}.csv')
 hyper_         = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
 print(hyper_)
 
-fraction = [0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.975][i_job]
 
-dfs_ = []
-for asset in assets_:
-    for day in range(363):
+FIS_ = []
+FCS_ = []
 
-        file_name = f'{asset}-{day}-{time}'
-        print(i_job, file_name)
+asset = assets_[i_job]
+for day in range(363):
 
-        try:
+    file_name = f'{asset}-{day}-{time}'
+    print(i_job, file_name)
 
-            # Get functional predictors for a given test
-            f_     = F_ts_[day, :time, asset]
-            e_lin_ = E_ts_lin_[day, :, asset]
-            e_     = E_ts_[day, :, asset]
-            x_     = x_ts_[asset, :]
-            t      = t_ts_[day]
-            f_hat_ = F_ts_[day, time:, asset]
+    try:
 
-            # Filter solar hours with loading solar set
-            idx_days_  = np.absolute(t_tr_ - day) < 7
-            idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
-                        + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
+        # Get functional predictors for a given test
+        f_     = F_ts_[day, :time, asset]
+        e_lin_ = E_ts_lin_[day, :, asset]
+        e_     = E_ts_[day, :, asset]
+        x_     = x_ts_[asset, :]
+        t      = t_ts_[day]
+        f_hat_ = F_ts_[day, time:, asset]
 
-            _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                        forget_rate_f  = hyper_.loc['forget_rate_f'][time],
-                                                        forget_rate_e  = hyper_.loc['forget_rate_e'][time],
-                                                        length_scale_f = hyper_.loc['length_scale_f'][time],
-                                                        length_scale_e = hyper_.loc['length_scale_e'][time],
-                                                        lookup_rate    = hyper_.loc['lookup_rate'][time],
-                                                        trust_rate     = hyper_.loc['trust_rate'][time],
-                                                        nu             = hyper_.loc['nu'][time],
-                                                        gamma          = hyper_.loc['gamma'][time],
-                                                        xi             = hyper_.loc['xi'][time],
-                                                        kappa_min      = hyper_.loc['kappa_min'][time],
-                                                        kappa_max      = hyper_.loc['kappa_max'][time], 
-                                                        idx_hours_     = idx_hours_)
+        # Filter solar hours with loading solar set
+        idx_days_  = np.absolute(t_tr_ - day) < 7
+        idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
+                    + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
 
-            f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
-            f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
+        _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
+                                                  forget_rate_f  = hyper_.loc['forget_rate_f'][time],
+                                                  forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                  length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                  length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                  lookup_rate    = hyper_.loc['lookup_rate'][time],
+                                                  trust_rate     = hyper_.loc['trust_rate'][time],
+                                                  nu             = hyper_.loc['nu'][time],
+                                                  gamma          = hyper_.loc['gamma'][time],
+                                                  xi             = hyper_.loc['xi'][time],
+                                                  kappa_min      = hyper_.loc['kappa_min'][time],
+                                                  kappa_max      = hyper_.loc['kappa_max'][time], 
+                                                  idx_hours_     = idx_hours_)
 
-            m_0_ = np.ones(_meta['m_0'].shape)*f_[-1]
-            M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, m_0_, dt_,
-                                                                        subsample = 12,
-                                                                        n_basis   = int(M_.shape[1]/5)) 
+        f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
+        f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
 
-            if dist == 'fknn':
-                dist_ = _meta['w'][_meta['idx_4']]
-            else:
-                dist_ = dist
+        m_0_ = np.ones(_meta['m_0'].shape)*f_[-1]
+        M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, m_0_, dt_,
+                                                                  subsample = 12,
+                                                                  n_basis   = int(M_.shape[1]/5)) 
 
-            J_ = _focal_curve_envelope(ModifiedBandDepth(), 
-                                        Y_       = M_interp_.T, 
-                                        dt_      = dt_[-M_interp_.shape[1]:], 
-                                        dist_    = dist_,
-                                        max_iter = 100).T
+        if dist == 'fknn':
+            dist_ = _meta['w'][_meta['idx_4']]
+        else:
+            dist_ = dist
+
+        J_ = _focal_curve_envelope(ModifiedBandDepth(), 
+                                    Y_       = M_interp_.T, 
+                                    dt_      = dt_[-M_interp_.shape[1]:], 
+                                    dist_    = dist_,
+                                    max_iter = 100).T
+        
+        for fraction in fractions_:
 
             k = int(fraction*M_.shape[0])
 
             m_, u_, l_ = _functional_confidence_band(J_, k)
 
-            FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
-            FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
+            for alpha in alpha_:
+                FCS = np.absolute(_empirical_coverage_score(f_hat_, l_[1:], u_[1:]) - (1. - alpha))
+                FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
 
-            # Save results
-            dfs_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS, FCS])
+                # Save results
+                FCS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FCS])
+                FIS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS])
 
-        except Exception as e:
-            print(f"Error for asset={asset}, day={day}, file={file_name}")
-            print(f"Exception: {e}")
-            traceback.print_exc()
-            # loop continues automatically
+    except Exception as e:
+        print(f"Error for asset={asset}, day={day}, file={file_name}")
+        print(f"Exception: {e}")
+        traceback.print_exc()
+        # loop continues automatically
 
-dfs_ = pd.DataFrame(dfs_, columns = ['time', 
+FCS_ = pd.DataFrame(FCS_, columns = ['time', 
                                      'asset', 
                                      'day', 
                                      'alpha', 
@@ -306,11 +311,24 @@ dfs_ = pd.DataFrame(dfs_, columns = ['time',
                                      'distance',
                                      'n_scen', 
                                      'n_scen_evenlop', 
-                                     'WIS', 
                                      'FCS'])
 
-print(i_job, resource, dist, dfs_.shape)
+FIS_ = pd.DataFrame(FIS_, columns = ['time', 
+                                     'asset', 
+                                     'day', 
+                                     'alpha', 
+                                     'k', 
+                                     'fraction', 
+                                     'distance',
+                                     'n_scen', 
+                                     'n_scen_evenlop', 
+                                     'FIS'])
 
-dfs_ = _gather_node_data(_comm, dfs_)
+print(i_job, resource, dist, FCS_.shape, FIS_.shape)
 
-_save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-{dist}-validation_envelop.csv')
+FCS_ = _gather_node_data(_comm, FCS_)
+FIS_ = _gather_node_data(_comm, FIS_)
+
+if i_job == 0:
+    _save_validation_csv(FCS_, path_to_file = path_to_validation + f'/{resource}-{method}-{dist}-FCS_validation_envelop_{val}.csv')
+    _save_validation_csv(FIS_, path_to_file = path_to_validation + f'/{resource}-{method}-{dist}-FIS_validation_envelop_{val}.csv')

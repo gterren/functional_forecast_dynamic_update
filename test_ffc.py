@@ -15,29 +15,47 @@ from functional_utils import _confidence_bands_from_eCDF
 from scores_utils import (_empirical_coverage_score,
                           _weighted_empirical_interval_score)
 
-path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
-path_to_data   = '/home/gterren/dynamic_update/data'
-path_to_test   = '/home/gterren/dynamic_update/test'
-path_to_param  = '/home/gterren/dynamic_update/params'
+path_to_fDepth    = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
+path_to_data      = '/home/gterren/dynamic_update/data'
+path_to_test      = '/home/gterren/dynamic_update/test'
+path_to_param     = '/home/gterren/dynamic_update/params'
+path_to_ensambles = '/home/gterren/dynamic_update/ensambles'
 
 def _save_validation_csv(df_new_, path_to_file):
 
-    if isinstance(df_new_, pd.DataFrame):
+    # Check if the CSV exists
+    if os.path.exists(path_to_file):
 
-        # Check if the CSV exists
-        if os.path.exists(path_to_file):
+        df_existing_ = pd.read_csv(path_to_file)
+        df_new_      = pd.concat([df_existing_, 
+                                  df_new_], 
+                                  ignore_index = True).reset_index(drop = True)
 
-            df_existing_ = pd.read_csv(path_to_file)
-            df_new_      = pd.concat([df_existing_, 
-                                      df_new_], 
-                                      ignore_index = True).reset_index(drop = True)
+    # Overwrite the CSV with the updated data
+    df_new_.to_csv(path_to_file, index = False)
+    print(path_to_file)
 
-        # Overwrite the CSV with the updated data
-        df_new_.to_csv(path_to_file, index = False)
-        print(path_to_file)
+
+def _save_validation_pickle(_new_dict, path_to_file):
+    """Load dict from pickle if it exists, merge with new_dict, and save back."""
+    
+    # If file exists, load existing dict and merge
+    if os.path.exists(path_to_file):
+        with open(path_to_file, "rb") as f:
+            _combined_dict = pkl.load(f)
+        # Merge: new values overwrite old ones on the same key
+        _combined_dict.update(_new_dict)
+    else:
+        # No file yet → just use the new dict
+        _combined_dict = _new_dict
+
+    # Save combined dict back to pickle
+    with open(path_to_file, "wb") as f:
+        pkl.dump(_combined_dict, f)
+    print(path_to_file)
 
 # Gather data from all MPI nodes
-def _gather_node_data(_comm, df_):
+def _gather_node_dataframes(_comm, df_):
 
     # Gather all dictionaries at root (rank 0)
     _gathered = _comm.gather(df_.to_dict(), root = 0)
@@ -45,7 +63,18 @@ def _gather_node_data(_comm, df_):
     if _comm.Get_rank() == 0:
         # Convert back to DataFrames and concatenate
         return pd.concat([pd.DataFrame.from_dict(d) for d in _gathered], 
-                         ignore_index = True)
+                          ignore_index = True)
+    else:
+        return None
+    
+def _gather_node_dict(_comm, _dict):
+    # Gather all dictionaries at root
+    _gathered_dicts = _comm.gather(_dict, root=0)
+    if _comm.Get_rank() == 0:
+        _combined_dicts = {}
+        for _dict in _gathered_dicts:
+            _combined_dicts.update(_dict)   # later dicts overwrite earlier on key conflicts
+        return _combined_dicts
     else:
         return None
     
@@ -67,8 +96,11 @@ resource = sys.argv[1]
 method   = sys.argv[2] 
 time     = int(sys.argv[3])
 
+# Validation set identifier
+val = 'iter_1'  
 # Assets in the calibration experiments
 assets_ = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+#assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 # Significance levels for the confidence intervals
 alpha_ = [0.1, 0.2, 0.3, 0.4]
 
@@ -214,17 +246,24 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_init.csv')
+hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_{val}.csv')
 hyper_         = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
-print(hyper_)
+
+#hyper_.loc['forget_rate_f'][time] = [0.0625, 0.125, 0.25, 0.5, 1., 2., 3., 4., 5., 6., 7., 8.][i_param]
+#hyper_.loc['length_scale_f'][time] = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5][i_param]
+#hyper_.loc['gamma'][time] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120][i_param]
+#hyper_.loc['xi'][time] = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.975, 0.99][i_param]
+#hyper_.loc['kappa_min'][time] = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130][i_param]
+#hyper_.loc['kappa_max'][time] = [75, 100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500][i_param]
 
 # Test setup
 dfs_ = []
+_ensambles = {}     
 asset = assets_[i_job]
 for day in range(363):
     file_name = f'{asset}-{day}-{time}'
-    print(i_job, file_name)
+    #print(i_job, file_name)
 
     try:
 
@@ -240,26 +279,24 @@ for day in range(363):
         tau_ = dt_[:time]
         s_   = dt_[time:]
 
-        t1 = datetime.datetime.now()
-
         # Filter solar hours with loading solar set
         idx_days_  = np.absolute(t_tr_ - day) < 7
         idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
                     + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
         
         _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                forget_rate_f  = hyper_.loc['forget_rate_f'][time],
-                                                forget_rate_e  = hyper_.loc['forget_rate_e'][time],
-                                                length_scale_f = hyper_.loc['length_scale_f'][time],
-                                                length_scale_e = hyper_.loc['length_scale_e'][time],
-                                                lookup_rate    = hyper_.loc['lookup_rate'][time],
-                                                trust_rate     = hyper_.loc['trust_rate'][time],
-                                                nu             = hyper_.loc['nu'][time],
-                                                gamma          = hyper_.loc['gamma'][time],
-                                                xi             = hyper_.loc['xi'][time],
-                                                kappa_min      = hyper_.loc['kappa_min'][time],
-                                                kappa_max      = hyper_.loc['kappa_max'][time], 
-                                                idx_hours_     = idx_hours_)
+                                                  forget_rate_f  = hyper_.loc['forget_rate_f'][time],
+                                                  forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                  length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                  length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                  lookup_rate    = hyper_.loc['lookup_rate'][time],
+                                                  trust_rate     = hyper_.loc['trust_rate'][time],
+                                                  nu             = hyper_.loc['nu'][time],
+                                                  gamma          = hyper_.loc['gamma'][time],
+                                                  xi             = hyper_.loc['xi'][time],
+                                                  kappa_min      = hyper_.loc['kappa_min'][time],
+                                                  kappa_max      = hyper_.loc['kappa_max'][time], 
+                                                  idx_hours_     = idx_hours_)
 
         f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
         f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
@@ -273,16 +310,18 @@ for day in range(363):
 
         # Save results
         dfs_.append([time, 
-                    asset, 
-                    day, 
-                    x_[0], 
-                    x_[1], 
-                    M_.shape[0], 
-                    float(WIS_e), 
-                    float(WIS_f), 
-                    float(f_tau_rmse), 
-                    float(f_s_rmse)])
+                     asset, 
+                     day, 
+                     x_[0], 
+                     x_[1], 
+                     M_.shape[0], 
+                     float(WIS_e), 
+                     float(WIS_f), 
+                     float(f_tau_rmse), 
+                     float(f_s_rmse)])
         
+        _ensambles[file_name] = [f_hat_, M_]
+
     except Exception as e:
         print(f"Error for asset={asset}, day={day}, file={file_name}")
         print(f"Exception: {e}")
@@ -300,6 +339,14 @@ dfs_ = pd.DataFrame(dfs_, columns = ['time',
                                      'RMSE_tau', 
                                      'RMSE_s'])
 
-dfs_ = _gather_node_data(_comm, dfs_)
+dfs_['resource'] = resource
+dfs_['method']   = method
 
-_save_validation_csv(dfs_, path_to_file = path_to_test + f'/{resource}-{method}-test_ffc.csv')
+dfs_       = _gather_node_dataframes(_comm, dfs_)
+_ensambles = _gather_node_dict(_comm, _ensambles)
+
+if i_job == 0:
+    print(hyper_[time])
+    print(dfs_.groupby(['resource', 'method', 'time']).agg({'WIS_f': 'median'}).reset_index(drop = False))
+    _save_validation_csv(dfs_, path_to_file = path_to_test + f'/{resource}-{method}-test_ffc_{val}.csv')
+    #_save_validation_pickle(_ensambles, path_to_file = path_to_ensambles + f'/{resource}-{method}-iter_1-test_ffc.pkl')

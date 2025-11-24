@@ -265,7 +265,7 @@ def _weighted_empirical_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_up
     - y_true: Observed (true) values
     - _y_pred_lower: dictionary with upper confidence interval for all significance levels alpha
     - _y_pred_lower: dictionary with lower confidence interval for all significance levels alpha
-    - alpha: all significance level alpha (default 0.05 for 90% confidence interval)
+    - alpha: all significance level alpha (default 0.05 for 95% confidence interval)
 
     Returns:
     - WIS: float, the Weighted Interval Score.

@@ -40,7 +40,7 @@ def _save_validation_csv(df_new_, path_to_file):
         print(path_to_file)
 
 # Gather data from all MPI nodes
-def _gather_node_data(_comm, df_):
+def _gather_node_dataframes(_comm, df_):
 
     # Gather all dictionaries at root (rank 0)
     _gathered = _comm.gather(df_.to_dict(), root = 0)
@@ -64,7 +64,6 @@ def _get_node_info(verbose = False):
 
 # MPI job variables
 i_job, N_jobs, _comm = _get_node_info()
-#i_job = 0
 
 # Calibration experiments setup
 resource = sys.argv[1]
@@ -219,74 +218,48 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_init.csv')
+hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_val.csv')
 hyper_         = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
-print(hyper_)
 
-# Hyperparameters for the functional forecast dynamic update:
-forget_rate_f_  = [hyper_.loc['forget_rate_f'][time]]
-forget_rate_e_  = [hyper_.loc['forget_rate_e'][time]]
-lookup_rate_    = [hyper_.loc['lookup_rate'][time]]
-length_scale_f_ = [hyper_.loc['length_scale_f'][time]]   
-length_scale_e_ = [hyper_.loc['length_scale_e'][time]]
-trust_rate_     = [hyper_.loc['trust_rate'][time]]
-nu_             = [hyper_.loc['nu'][time]]
-xi_             = [hyper_.loc['xi'][time]]
-gamma_          = [hyper_.loc['gamma'][time]]
-kappa_min_      = [hyper_.loc['kappa_min'][time]]
-kappa_max_      = [hyper_.loc['kappa_max'][time]]
-
-if param == 'forget_rate_f':
-    forget_rate_f_ = [0.0625, 0.125, 0.25, 0.5, 1., 2., 3., 4., 5., 6., 7., 8.]
-
-if param == 'forget_rate_e':
-    forget_rate_e_ =  [0.25, 0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512.]
-
-if param == 'length_scale_f':
-    length_scale_f_ = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5]
-
-if param == 'length_scale_e':
-    length_scale_e_ = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5]
-
-if param == 'lookup_rate':
-    lookup_rate_ = [0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1028]
-
-if param == 'trust_rate':
-    trust_rate_ = [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.]
-
-if param == 'nu':
-    nu_ = [1., 2., 3, 4., 5, 6., 8., 10., 12., 14., 16., 18]
-
-if param == 'gamma':
-    gamma_ = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
-
-if param == 'xi':
-    xi_ = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.975, 0.99]
-
-if param == 'kappa_min':
-    kappa_min_ = [25, 40, 55, 70, 85, 100, 125, 150, 175, 200, 225, 250]
-
-if param == 'kappa_max':
-    kappa_max_ = [100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500, 1750]
-
-print(i_job, resource, param)
-
-params_ = tuple(product(forget_rate_f_, 
-                        forget_rate_e_, 
-                        length_scale_f_,
-                        length_scale_e_,
-                        lookup_rate_, 
-                        trust_rate_, 
-                        nu_,
-                        gamma_,
-                        xi_, 
-                        kappa_min_, 
-                        kappa_max_))[i_job]
-#print(params_)
 
 dfs_ = []
-for asset in assets_:
+asset = assets_[i_job]
+for i_param in range(12):
+    # Hyperparameters for the functional forecast dynamic update:
+    if param == 'forget_rate_f':
+        hyper_.loc['forget_rate_f', time] = [0.0625, 0.125, 0.25, 0.5, 1., 2., 3., 4., 5., 6., 7., 8.][i_param]
+
+    if param == 'forget_rate_e':
+        hyper_.loc['forget_rate_e', time] = [0.25, 0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512.][i_param]
+
+    if param == 'length_scale_f':
+        hyper_.loc['length_scale_f', time] = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5][i_param]
+
+    if param == 'length_scale_e':
+        hyper_.loc['length_scale_e', time] = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5][i_param]
+
+    if param == 'lookup_rate':
+        hyper_.loc['lookup_rate', time] = [0.5, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1028][i_param]
+
+    if param == 'trust_rate':
+        hyper_.loc['trust_rate', time] = [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.][i_param]
+
+    if param == 'nu':
+        hyper_.loc['nu', time] = [1., 2., 3, 4., 5, 6., 8., 10., 12., 14., 16., 18][i_param]
+
+    if param == 'gamma':
+        hyper_.loc['gamma', time] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120][i_param]
+
+    if param == 'xi':
+        hyper_.loc['xi', time] = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.975, 0.99][i_param]
+
+    if param == 'kappa_min':
+        hyper_.loc['kappa_min', time] = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130][i_param]
+
+    if param == 'kappa_max':
+        hyper_.loc['kappa_max', time] = [75, 100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500][i_param]
+
     for day in range(363):
 
         file_name = f'{asset}-{day}-{time}'
@@ -312,18 +285,18 @@ for asset in assets_:
                         + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
             
             _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                        forget_rate_f  = params_[0],
-                                                        forget_rate_e  = params_[1],
-                                                        length_scale_f = params_[2],
-                                                        length_scale_e = params_[3],
-                                                        lookup_rate    = params_[4],
-                                                        trust_rate     = params_[5],
-                                                        nu             = params_[6],
-                                                        gamma          = params_[7],
-                                                        xi             = params_[8],
-                                                        kappa_min      = params_[9],
-                                                        kappa_max      = params_[10], 
-                                                        idx_hours_     = idx_hours_)
+                                                    forget_rate_f  = hyper_.loc['forget_rate_f'][time],
+                                                    forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                    length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                    length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                    lookup_rate    = hyper_.loc['lookup_rate'][time],
+                                                    trust_rate     = hyper_.loc['trust_rate'][time],
+                                                    nu             = hyper_.loc['nu'][time],
+                                                    gamma          = hyper_.loc['gamma'][time],
+                                                    xi             = hyper_.loc['xi'][time],
+                                                    kappa_min      = hyper_.loc['kappa_min'][time],
+                                                    kappa_max      = hyper_.loc['kappa_max'][time], 
+                                                    idx_hours_     = idx_hours_)
 
             f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
             f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
@@ -335,17 +308,8 @@ for asset in assets_:
             WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
 
             # Save results
-            dfs_.append(list(params_ + tuple([time, 
-                                                asset, 
-                                                day,
-                                                param,
-                                                x_[0], 
-                                                x_[1],
-                                                M_.shape[0], 
-                                                float(WIS_e), 
-                                                float(WIS_f), 
-                                                float(f_tau_rmse), 
-                                                float(f_s_rmse)])))
+            value = hyper_.loc[param, time].tolist()
+            dfs_.append([time, asset, day, param, value, x_[0], x_[1], M_.shape[0], WIS_e, WIS_f, f_tau_rmse, f_s_rmse])
 
         except Exception as e:
             print(f"Error for asset={asset}, day={day}, file={file_name}")
@@ -355,21 +319,11 @@ for asset in assets_:
 
 #print(i_job, sys.argv[1], sys.argv[2], resource, datetime.datetime.now())
 
-dfs_ = pd.DataFrame(dfs_, columns = ['forget_rate_f', 
-                                     'forget_rate_e', 
-                                     'length_scale_f',
-                                     'length_scale_e', 
-                                     'lookup_rate', 
-                                     'trust_rate',
-                                     'nu', 
-                                     'gamma', 
-                                     'xi',
-                                     'kappa_min',
-                                     'kappa_max',
-                                     'time', 
+dfs_ = pd.DataFrame(dfs_, columns = ['time', 
                                      'asset', 
                                      'day', 
                                      'parameter',
+                                     'value',
                                      'lon',
                                      'lat',
                                      'n_scenarios', 
@@ -378,8 +332,14 @@ dfs_ = pd.DataFrame(dfs_, columns = ['forget_rate_f',
                                      'RMSE_tau', 
                                      'RMSE_s'])
 
-print(i_job, resource, param, dfs_.shape)
+print(i_job, resource, method, param, value, dfs_.shape)
 
-dfs_ = _gather_node_data(_comm, dfs_)
+dfs_['resource'] = resource
+dfs_['method']   = method
 
-_save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc.csv')
+dfs_ = _gather_node_dataframes(_comm, dfs_)
+
+if i_job == 0:
+    print(hyper_[time])
+    print(dfs_.groupby(['resource', 'method', 'parameter', 'value', 'time']).agg({'WIS_f': 'median'}).reset_index(drop = False))
+    _save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc_iter_1.csv')
