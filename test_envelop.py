@@ -1,6 +1,7 @@
 import os, datetime, sys, time, traceback
 
 import pandas as pd
+from functional_utils import _confidence_bands_from_eCDF
 import numpy as np
 import pickle as pkl
 
@@ -8,6 +9,7 @@ from itertools import product
 from mpi4py import MPI
 
 from skfda.exploratory.depth import ModifiedBandDepth
+from functional_utils import _confidence_bands_from_eCDF
 
 from ffc_utils import (_fknn_forecast_dynamic_update,
                        _functional_downsampling, 
@@ -233,7 +235,6 @@ print(FIS_envelop_)
 
 FIS_ = []
 FCS_ = []
-
 asset = assets_[i_job]
 for day in range(363):
 
@@ -272,10 +273,16 @@ for day in range(363):
         f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
         f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
 
+        # Marginal Evaluation
+
+        # Confidence bands from marginal empirical density function
+        m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
+
+        # Functional Evaluation
         m_0_ = np.ones(_meta['m_0'].shape)*f_[-1]
         M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, m_0_, dt_,
-                                                                  subsample = 12,
-                                                                  n_basis   = int(M_.shape[1]/5)) 
+                                                                    subsample = 12,
+                                                                    n_basis   = int(M_.shape[1]/5)) 
 
         if dist == 'fknn':
             dist_ = _meta['w'][_meta['idx_4']]
@@ -283,10 +290,10 @@ for day in range(363):
             dist_ = dist
 
         J_ = _focal_curve_envelope(ModifiedBandDepth(), 
-                                   Y_       = M_interp_.T, 
-                                   dt_      = dt_[-M_interp_.shape[1]:], 
-                                   dist_    = dist_,
-                                   max_iter = 100).T
+                                    Y_       = M_interp_.T, 
+                                    dt_      = dt_[-M_interp_.shape[1]:], 
+                                    dist_    = dist_,
+                                    max_iter = 100).T
         
         for alpha in alpha_:
 
@@ -296,12 +303,15 @@ for day in range(363):
                     & (FIS_envelop_['distance'] == dist))
 
             fraction = FIS_envelop_.loc[idx_, 'fraction'].to_numpy()[0]
-
-            k = int(fraction*M_.shape[0])
+            k        = int(fraction*M_.shape[0])
 
             m_, u_, l_ = _functional_confidence_band(J_, k)
             FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
-            FIS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS])
+
+            u_, l_ = _upper[f'{alpha}'], _lower[f'{alpha}']
+            MIS = _empirical_interval_score(f_hat_, l_, u_, alpha).sum()
+
+            FIS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS, MIS])
 
             # CIS results
             idx_ = ((FCS_envelop_['alpha'] == alpha)
@@ -309,11 +319,15 @@ for day in range(363):
                     & (FCS_envelop_['distance'] == dist))
             
             fraction = FCS_envelop_.loc[idx_, 'fraction'].to_numpy()[0]
-            
-            k = int(fraction*M_.shape[0])
+            k        = int(fraction*M_.shape[0])
+
             m_, u_, l_ = _functional_confidence_band(J_, k)
             FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
-            FCS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FCS])
+
+            u_, l_ = _upper[f'{alpha}'], _lower[f'{alpha}']
+            MCS = _empirical_coverage_score(f_hat_, l_, u_)
+
+            FCS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FCS, MCS])
 
     except Exception as e:
         print(f"Error for asset={asset}, day={day}, file={file_name}")
@@ -330,7 +344,8 @@ FCS_ = pd.DataFrame(FCS_, columns = ['time',
                                      'distance',
                                      'n_scen', 
                                      'n_scen_evenlop', 
-                                     'FCS'])
+                                     'FCS', 
+                                     'MCS'])
 
 FIS_ = pd.DataFrame(FIS_, columns = ['time', 
                                      'asset', 
@@ -341,7 +356,8 @@ FIS_ = pd.DataFrame(FIS_, columns = ['time',
                                      'distance',
                                      'n_scen', 
                                      'n_scen_evenlop', 
-                                     'FIS'])
+                                     'FIS',
+                                     'MIS'])
 
 print(i_job, resource, dist, FIS_.shape, FIS_.shape)
 

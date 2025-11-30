@@ -107,6 +107,7 @@ def _pit(y_true, forecast_mean, forecast_std):
 
     return np.array([u_samples.mean(), u_samples.std()])
 
+
 def _coverage_score(y_true, forecast_mean, forecast_std, z, alpha):
     """
     Calculate the coverage score for probabilistic forecasts with an interval [lower, upper].
@@ -136,41 +137,8 @@ def _coverage_score(y_true, forecast_mean, forecast_std, z, alpha):
 
     return coverage #- (1. - 2.*alpha)
 
-
-# def _weighted_interval_score(y_true, forecast_mean, forecast_cov,
-#                              alpha_ = [0.05, 0.1, 0.2, 0.4, 0.8],
-#                              z_     = [2.3, 1.96, 1.65, 1.28, 0.84]):
-#     """
-#     Calculate the interval score for probabilistic forecasts with an interval [lower, upper].
     
-#     Parameters:
-#     - y_true: Observed (true) values
-#     - forecast_mean: Mean of the predicted distribution (e.g., mean of the normal distribution)
-#     - forecast_cov: Standard deviation of the predicted distribution
-#     - alpha: Significance level (default 0.05 for 90% confidence interval)
-#     - z: z-score for a normal distribution 
-
-#     Returns:
-#     - WIS: float, the Weighted Interval Score.
-#     """
-    
-#     forecast_std = np.sqrt(np.diagonal(forecast_cov))
-  
-#     # Calculate the interval score
-#     w_  = np.array(alpha_)/2.
-#     is_ = np.array([_interval_score(y_true, forecast_mean, forecast_std, z, alpha) 
-#                     for z, alpha in zip(z_, alpha_)])
-#     term0 = 1./(len(z_) + 1/2.)
-#     term1 = 1/2. * np.absolute(y_true - forecast_mean)
-    
-#     for k in range(w_.shape[0]):
-#         is_[k, :] = w_[k] * is_[k, :]
-#     term2 = np.sum(is_, axis = 0)
-        
-#     return term1 * (term1 + term2)
-    
-    
-def _ks(y_true, forecast_mean, forecast_std, nbins = 100):
+def _KS(pit_, nbins = 20):
     """
     Calculate the Kolmogorov–Smirnov statistic for a normal dist.
     
@@ -182,15 +150,21 @@ def _ks(y_true, forecast_mean, forecast_std, nbins = 100):
     Returns:
     - ks: Kolmogorov–Smirnov statistic
     """
-    
-    u_samples_  = norm.cdf(y_true, loc = forecast_mean, scale = forecast_std)
-    hist_, bin_ = np.histogram(u_samples_, nbins, density=True)
-    bins_       = (bin_[:-1] + bin_[1:])/2.
-    #r_ = np.cumsum(hist_) - np.cumsum(np.ones(bins_.shape))
 
-    ks = np.sqrt(np.mean((np.cumsum(hist_) - np.cumsum(np.ones(bins_.shape)))**2))/hist_.shape[0]
+    y_ = np.concatenate(pit_, axis = 0)
+    N  = y_.shape[0]
+
+    z_, x_ = np.histogram(y_, 
+                          bins = nbins, 
+                          range = (0.0, 1.0))
     
-    return ks
+    # Empirical CDF at upper edge of each bin
+    ecdf_ = np.cumsum(z_) / N         # length nbins
+
+    # Theoretical CDF of U(0,1) at those same points
+    cdf_uniform_ = x_[1:]
+
+    return np.max(np.abs(ecdf_ - cdf_uniform_))
 
 def _empirical_coverage_score(y_true, lower_, upper_):
     coverage = 0
@@ -201,34 +175,60 @@ def _empirical_coverage_score(y_true, lower_, upper_):
             coverage += 1
     return coverage / y_true.shape[0]
 
-# def _empirical_coverage_score(y_true, _lower, _upper, alpha_):
-#     """`
-#     Calculate the coverage score for probabilistic forecasts with an interval [lower, upper]
+def _normal_PIT(y_true_, Y_ensambles_):
+    """
+    Calculate the Probabilistic Integral Transform (PIT) under normal distribution.
     
-#     Parameters:
-#     - y_: Observed (true) values
-#     - lower_: lower confidence bound
-#     - upper_: upper confidence dound
+    Parameters:
+    - y_true_: Observed (true) values
+    - Y_ensambles_: Ensemble forecasts (2D array where each row corresponds to an observation and columns to ensemble members)
+    Returns:
+    - u_: PIT values
+    """
+    mean_ = np.mean(Y_ensambles_, axis = 1)
+    std_  = np.std(Y_ensambles_, axis = 1)
+    return norm.cdf(y_true_, loc = mean_, scale = std_)
+
+def _empirical_PIT(y_obs, Y_ens):
+    """
+    Vectorized PIT for many cases.
+    obs:  shape (N,)
+    preds: shape (N, M) — row i are forecast samples for case i
+    returns: array (N,) with PIT values in (0,1)
+    """
+    y_obs = np.asarray(y_obs)
+    Y_ens = np.asarray(Y_ens)
+    N, M  = Y_ens.shape
+    u_ = np.zeros((N, ))
+    for i in range(N):
+        ecdf   = ECDF(Y_ens[i, :])
+        u_[i,] = ecdf(y_obs[i])  
+        
+    return u_
+
+
+def _randomized_PIT(y, ens, seed=1234):
+    """
+    Vectorized randomized PIT for:
+      y:   array (T,)
+      ens: array (T, N)
+    Returns:
+      pit: array (T,)
+    """
+    y = np.asarray(y)
+    ens = np.asarray(ens)
+    T, N = ens.shape
     
-#     Returns:
-#     - coverage_score: The calculated interval score
-#     """
-
-#     def _coverage_score(y_true, lower_, upper_):
-#         coverage = 0
-#         for i in range(y_true.shape[0]): 
-#             if (y_true[i] < lower_[i]) or (y_true[i] > upper_[i]):
-#                 coverage += 0
-#             else:
-#                 coverage += 1
-#         return coverage / y_true.shape[0]
-
-
-#     cs_ = np.zeros((len(alpha_),))
-#     for i in range(len(alpha_)):
-#         cs_[i] = _coverage_score(y_true, _lower[f'{alpha_[i]}'], _upper[f'{alpha_[i]}'])
+    rng = np.random.default_rng(seed)
+    pit = np.empty(T)
     
-#     return cs_
+    for t in range(T):
+        ens_sorted = np.sort(ens[t])
+        k = np.searchsorted(ens_sorted, y[t], side="right")
+        u = rng.uniform(0.0, 1.0)
+        pit[t] = (k + u) / (N + 1)
+    
+    return pit
 
 
 def _empirical_interval_score(y_true, y_pred_lower, y_pred_upper, alpha):

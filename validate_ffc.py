@@ -11,7 +11,8 @@ from ffc_utils import _fknn_forecast_dynamic_update
 
 from functional_utils import _confidence_bands_from_eCDF
 
-from scores_utils import (_empirical_coverage_score,
+from scores_utils import (_randomized_PIT, 
+                          _KS,
                           _weighted_empirical_interval_score)
 
 path_to_fDepth     = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
@@ -222,8 +223,8 @@ hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_val.c
 hyper_         = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
 
-
-dfs_ = []
+WIS_ = []
+KS_  = []
 asset = assets_[i_job]
 for i_param in range(12):
     # Hyperparameters for the functional forecast dynamic update:
@@ -260,10 +261,11 @@ for i_param in range(12):
     if param == 'kappa_max':
         hyper_.loc['kappa_max', time] = [75, 100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500][i_param]
 
+    PIT_ = []
     for day in range(363):
 
         file_name = f'{asset}-{day}-{time}'
-        #print(i_job, file_name)
+        #print(i_job, i_param, file_name)
 
         try:
 
@@ -283,33 +285,35 @@ for i_param in range(12):
             idx_days_  = np.absolute(t_tr_ - day) < 7
             idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
                         + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
-            
-            _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                    forget_rate_f  = hyper_.loc['forget_rate_f'][time],
-                                                    forget_rate_e  = hyper_.loc['forget_rate_e'][time],
-                                                    length_scale_f = hyper_.loc['length_scale_f'][time],
-                                                    length_scale_e = hyper_.loc['length_scale_e'][time],
-                                                    lookup_rate    = hyper_.loc['lookup_rate'][time],
-                                                    trust_rate     = hyper_.loc['trust_rate'][time],
-                                                    nu             = hyper_.loc['nu'][time],
-                                                    gamma          = hyper_.loc['gamma'][time],
-                                                    xi             = hyper_.loc['xi'][time],
-                                                    kappa_min      = hyper_.loc['kappa_min'][time],
-                                                    kappa_max      = hyper_.loc['kappa_max'][time], 
-                                                    idx_hours_     = idx_hours_)
 
-            f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
-            f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
+            _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
+                                                      forget_rate_f  = hyper_.loc['forget_rate_f'][time],
+                                                      forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                      length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                      length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                      lookup_rate    = hyper_.loc['lookup_rate'][time],
+                                                      trust_rate     = hyper_.loc['trust_rate'][time],
+                                                      nu             = hyper_.loc['nu'][time],
+                                                      gamma          = hyper_.loc['gamma'][time],
+                                                      xi             = hyper_.loc['xi'][time],
+                                                      kappa_min      = hyper_.loc['kappa_min'][time],
+                                                      kappa_max      = hyper_.loc['kappa_max'][time], 
+                                                      idx_hours_     = idx_hours_)
+
+            RMSE = np.sqrt(np.mean((_meta['focal_curve'] - e_[time:])**2))
+            MBE  = np.mean(f_hat_ - _meta['focal_curve'])
 
             # Confidence bands from marginal empirical density function
             m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
 
-            WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
-            WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
+            WIS = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
+            PIT = _randomized_PIT(f_hat_, M_, seed = 1234)
+
+            value = hyper_.loc[param, time].tolist()
 
             # Save results
-            value = hyper_.loc[param, time].tolist()
-            dfs_.append([time, asset, day, param, value, x_[0], x_[1], M_.shape[0], WIS_e, WIS_f, f_tau_rmse, f_s_rmse])
+            WIS_.append([time, asset, day, param, value, x_[0], x_[1], M_.shape[0], WIS, RMSE, MBE])
+            PIT_.append(PIT)
 
         except Exception as e:
             print(f"Error for asset={asset}, day={day}, file={file_name}")
@@ -317,9 +321,11 @@ for i_param in range(12):
             traceback.print_exc()
             # loop continues automatically
 
-#print(i_job, sys.argv[1], sys.argv[2], resource, datetime.datetime.now())
+    KS = _KS(PIT_)
 
-dfs_ = pd.DataFrame(dfs_, columns = ['time', 
+    KS_.append([time, asset, param, value, x_[0], x_[1], KS])
+
+WIS_ = pd.DataFrame(WIS_, columns = ['time', 
                                      'asset', 
                                      'day', 
                                      'parameter',
@@ -327,19 +333,31 @@ dfs_ = pd.DataFrame(dfs_, columns = ['time',
                                      'lon',
                                      'lat',
                                      'n_scenarios', 
-                                     'WIS_e', 
-                                     'WIS_f', 
-                                     'RMSE_tau', 
-                                     'RMSE_s'])
+                                     'WIS', 
+                                     'RMSE', 
+                                     'MBE'])
 
-print(i_job, resource, method, param, value, dfs_.shape)
+KS_ = pd.DataFrame(KS_, columns = ['time', 
+                                   'asset', 
+                                   'parameter',
+                                   'value',
+                                   'lon',
+                                   'lat',
+                                   'KS'])
 
-dfs_['resource'] = resource
-dfs_['method']   = method
+print(i_job, resource, method, param, value, WIS_.shape, KS_.shape)
 
-dfs_ = _gather_node_dataframes(_comm, dfs_)
+WIS_['resource'] = resource
+WIS_['method']   = method
+KS_['resource']  = resource
+KS_['method']    = method
+
+WIS_ = _gather_node_dataframes(_comm, WIS_)
+KS_  = _gather_node_dataframes(_comm, KS_)
 
 if i_job == 0:
     print(hyper_[time])
-    print(dfs_.groupby(['resource', 'method', 'parameter', 'value', 'time']).agg({'WIS_f': 'median'}).reset_index(drop = False))
-    _save_validation_csv(dfs_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc_iter_1.csv')
+    print(WIS_.groupby(['resource', 'method', 'parameter', 'value', 'time']).agg({'WIS': 'median'}).reset_index(drop = False))
+    print(KS_.groupby(['resource', 'method', 'parameter', 'value', 'time']).agg({'KS': 'median'}).reset_index(drop = False))
+    _save_validation_csv(WIS_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc-WIS.csv')    
+    _save_validation_csv(KS_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc-KS.csv')
