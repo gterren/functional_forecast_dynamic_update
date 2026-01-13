@@ -247,8 +247,8 @@ def _eQuantile(_eCDF, q_):
 
     return np.array([_eCDF.x[np.searchsorted(_eCDF.y, q)] for q in q_])
     
-# Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_fDepth(M_, alpha_, depth, path):
+# Derive confidence bands from a functional depth metric
+def _confidence_bands_from_fDepth(M_, alpha_, depth, path):
 
     # Calculate functional depth ranking
     D_ = _fDepth(M_, depth, path).to_numpy()[:, 0]
@@ -267,8 +267,8 @@ def _confidence_intervals_from_fDepth(M_, alpha_, depth, path):
 
     return m_, _y_pred_upper, _y_pred_lower
 
-# Boostrapped confidence intervals derived from a functional depth metric
-def _bootrapped_confidence_intervals_from_fDepth(M_, alpha_, depth, path):
+# Boostrapped confidence bands derived from a functional depth metric
+def _bootrapped_confidence_bands_from_fDepth(M_, alpha_, depth, path):
 
     # Calculate functional depth ranking
     m_, inf_, sup_ = _bootstrap_fDepth(M_, alpha_, depth, path)
@@ -281,8 +281,8 @@ def _bootrapped_confidence_intervals_from_fDepth(M_, alpha_, depth, path):
 
     return m_, _y_pred_upper, _y_pred_lower
 
-# Derive confidence intervals from a functional depth metric
-def _confidence_intervals_from_eCDF(M_, alpha_):    
+# Derive confidence bands from a functional depth metric
+def _confidence_bands_from_eCDF(M_, alpha_):    
 
     _y_pred_upper = {}
     _y_pred_lower = {}

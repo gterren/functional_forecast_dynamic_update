@@ -2,16 +2,15 @@ import os, glob, datetime
 
 import pandas as pd
 import numpy as np
-import pickle as pkl
 import scipy.stats as stats
 
 from scipy.stats import multivariate_normal, norm
-from functional_utils import _fDepth, _fQuantile
+
 from sklearn.neighbors import KernelDensity
 from statsmodels.distributions.empirical_distribution import ECDF
 
 # Calculate weighted (w_) distance between X_ and x_
-def _euclidian_dist(X_, x_, w_=[]):
+def _euclidian_dist(X_, x_, w_ = []):
     if len(w_) == 0:
         w_ = np.ones(x_.shape)
     w_ = w_ / w_.sum()
@@ -25,15 +24,32 @@ def _rbf_kernel(d_, length_scale):
     w_ = np.exp(-d_ / length_scale)
     return w_  # /w_.sum()
 
-# Define exponential growth function
-def _exponential_growth(t, dacay_rate, innit = 0):
-    tau_ = np.linspace(t - 1, 0, t)
-    return np.exp(-dacay_rate*tau_)
+def _inv_dist(d_, length_scale):
+    w_ = 1.0 / (d_ + length_scale)
+    return w_  # /w_.sum()
 
-# Define exponential dacay function
-def _exponential_decay(S, dacay_rate):
-    s_ = np.linspace(0, S - 1, S)
-    return np.exp(-dacay_rate*s_)
+# Define exponential growth function
+def _exponential_growth(t, growth_rate):
+    tau_ = np.linspace(t - 1, 0, t)
+    phi_ = np.exp(np.log(0.5)*tau_/(growth_rate*12))
+    return phi_
+
+# Define exponential decay function
+def _exponential_decay(S, decay_rate):
+    s_   = np.linspace(0, S - 1, S)
+    psi_ = np.exp(np.log(0.5)*s_/(decay_rate*12))
+    return psi_    
+
+def _logistic(x_, k):
+    return 1. - 1.0 / (1.0 + np.exp(np.log(999) * x_ / (k*60/2)))
+
+# Linear Inverse Exponential function
+def _LIE(x_, t, T, nu, trust_rate, k = 2.5, alpha = 1.):
+    x_ = x_ - T*5 + nu*5*12
+    x_ = k*x_/(nu*5*12 - 5)
+    y_ = np.where(x_ > 0, -x_, -alpha*(np.exp(x_) - 1))
+    y_ = (y_ + k)/(k + alpha)
+    return trust_rate*y_
 
 def _haversine_dist(x_1_, x_2_):
     """
@@ -47,22 +63,25 @@ def _haversine_dist(x_1_, x_2_):
         float: Distance between the two points in kilometers.
     """
     R = 6371  # Radius of Earth in kilometers
-    
+
     dlat_ = np.deg2rad(x_2_[:, 1]) - np.deg2rad(x_1_[1])
     dlon_ = np.deg2rad(x_2_[:, 0]) - np.deg2rad(x_1_[0])
-    
-    theta = np.sin(dlat_/2)**2 + np.cos(np.deg2rad(x_1_[1]))*np.cos(np.deg2rad(x_2_[:, 1]))*np.sin(dlon_/2)**2
-    
-    return 2.*R*np.arcsin(np.sqrt(theta))
 
-def _logistic(x_, k = 1.):
-    return 1. / (1. + np.exp( - k*x_))
+    theta = (np.sin(dlat_ / 2) ** 2
+             + np.cos(np.deg2rad(x_1_[1]))
+             * np.cos(np.deg2rad(x_2_[:, 1]))
+             * np.sin(dlon_ / 2) ** 2)
+
+    return 2.0 * R * np.arcsin(np.sqrt(theta))
+
+# Periodic distance to rank samples by day of the year
+def _periodic_dist(d, gamma, 
+                   day_to_degree = 360/365, 
+                   degree_to_rad = np.pi/180):
+    return np.sin(0.5*day_to_degree*(d - gamma)*degree_to_rad)**2
 
 # Define a function to calculate quantiles
-def _KDE_quantile(_KDE, q_, x_min     = 0., 
-                            x_max     = 1., 
-                            n_samples = 1000):
-    
+def _KDE_quantile(_KDE, q_, x_min=0.0, x_max=1.0, n_samples=1000):
     """
     Calculates the quantile for a given probability using KDE.
 
@@ -76,70 +95,151 @@ def _KDE_quantile(_KDE, q_, x_min     = 0.,
 
     # Calculate CDF
     x_ = np.linspace(x_min, x_max, n_samples)
-    #z_ = np.exp(_KDE.score_samples(x_[:, np.newaxis]))
+    # z_ = np.exp(_KDE.score_samples(x_[:, np.newaxis]))
     w_ = np.cumsum(np.exp(_KDE.score_samples(x_[:, np.newaxis])))
     # Normalize CDF
-    w_ /= w_[-1] 
-    
-    return np.interp(np.array(q_), w_, x_), np.interp(1. - np.array(q_), w_, x_)
+    w_ /= w_[-1]
+
+    return np.interp(np.array(q_), w_, x_), np.interp(1.0 - np.array(q_), w_, x_)
 
 # Silverman's Rule
 def _silverman_rule(x_):
     IQR = np.percentile(x_, 75) - np.percentile(x_, 25)
     return 0.9 * min(np.std(x_), IQR / 1.34) * x_.shape[0] ** (-1 / 5)
 
-# Periodic distance to rank samples by day of the year
-def _periodic_dist(x_1_, x_2_, day_to_degree=360/365, degree_to_rad=np.pi / 180):
-    return np.sin(0.5 * (day_to_degree * (x_2_ - x_1_) * degree_to_rad) ) ** 2
+# Filtering scenarios when they are above the upper threshold or 
+# below the lower threshold
+def _scenario_filtering(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
 
-# Filtering scenarios when they are above the upper threshold or below the lower threshold
-def _scenario_filtering(W_, d_h_, d_p_, xi, gamma, kappa_min, kappa_max):
-
-    status = 0
     sigma  = 0
+    idx_spatial_  = None
+    idx_temporal_ = None
+    # Filter by similarity
+    idx_          = np.arange(d_p_.shape[0], dtype = int)
+    w_            = np.min(W_, axis = 0)
+    idx_neigbors_ = idx_[w_ >= xi]
 
-    # Similarity ranking
-    idx_rank_ = np.argmin(W_, axis=0)
+    idx_temporal_ = idx_neigbors_.copy()
+    idx_spatial_  = idx_neigbors_.copy()
+    idx_final_    = idx_neigbors_.copy()
 
-    # Similarity filter
-    w_ = np.min(W_, axis=0)
-    idx_bool_ = w_ >= xi
-    print(kappa_min, idx_bool_.sum(), kappa_max)
+    if idx_neigbors_.shape[0] > kappa_max:
 
-    # Index from selected scenarios
-    idx_1_ = np.arange(w_.shape[0])[idx_bool_]
-    # Filter by temporal distance
-    if idx_bool_.sum() > kappa_max:
-        print("(1) Filtering by date: ")
-        idx_bool_p_ = idx_bool_ & (d_p_ <= gamma)
-        print(idx_bool_p_.sum())
+        # Filter by temporal distance
+        idx_temporal_ = idx_[d_p_ <= gamma]
+        idx_temporal_ = np.intersect1d(idx_neigbors_, idx_temporal_)
+        if idx_.shape[0] < kappa_min:
+            idx_temporal_ = idx_neigbors_.copy()
 
-        if idx_bool_p_.sum() > kappa_min:
-            status    = 1
-            idx_bool_ = idx_bool_p_.copy()
+        # Filter by spatial distance
+        idx_spatial_rank_ = np.argsort(d_h_[idx_temporal_])
+        idx_spatial_      = idx_temporal_[idx_spatial_rank_][:kappa_max]
+        if idx_spatial_.shape[0] < kappa_min:
+            idx_spatial_ = idx_temporal_.copy()
         else:
-            print(" Bypass filtering by date: ")
-            gamma = 0
-            print(idx_bool_.sum())
+            sigma = d_h_[idx_spatial_].max()
 
-    idx_2_ = np.arange(w_.shape[0])[idx_bool_]
+        idx_final_ = idx_spatial_.copy()
 
-    # Filter by spatial distance
-    if idx_bool_.sum() > kappa_max:
-        print("(2) Filtering by distance: ")
-        status    = 2
-        sigma     = np.sort(d_h_[idx_bool_])[kappa_max]
-        idx_bool_ = idx_bool_ & (d_h_ <= sigma)
-        print(idx_bool_.sum())
+    if idx_neigbors_.shape[0] < kappa_min:
+        # Increase similarity threshold
+        idx_final_ = idx_[w_ >= np.sort(w_)[::-1][kappa_min]]
 
-    if idx_bool_.sum() < kappa_min:
-        print("Increasing similarity threshold: ")
-        status    = 2
-        gamma     = 0
-        xi        = np.sort(w_)[::-1][kappa_min]
-        idx_bool_ = w_ >= xi
-        print(idx_bool_.sum())
+    return w_, idx_neigbors_, idx_temporal_, idx_spatial_, idx_final_, sigma
 
-    idx_3_ = np.arange(w_.shape[0])[idx_bool_]
+def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t_ts,
+                                  forget_rate_f  = 1.,
+                                  forget_rate_e  = .5,
+                                  length_scale_f = .1,
+                                  length_scale_e = .75,
+                                  lookup_rate    = .05,
+                                  trust_rate     = 0.0175,
+                                  nu             = 340,
+                                  gamma          = 30,
+                                  xi             = 0.99,
+                                  kappa_min      = 500,
+                                  kappa_max      = 1500,
+                                  idx_hours_     = False):
 
-    return w_, idx_rank_, idx_bool_, idx_1_, idx_2_, idx_3_, xi, gamma, sigma, status
+    kappa_min = int(kappa_min)
+    kappa_max = int(kappa_max)
+
+    # Get constants
+    T    = E_tr_.shape[1]
+    t    = f_.shape[0]
+    tau_ = dt_[:t]
+    s_   = dt_[t:]
+
+    # phi: importance weights based on past time distance
+    phi_ = _exponential_growth(t, forget_rate_f)
+    # psi: importance weights based on past and future time distance
+    psi_1_ = _exponential_growth(t, forget_rate_e)
+    psi_2_ = _exponential_decay(T - t, lookup_rate)
+    psi_   = np.concatenate([psi_1_, psi_2_], axis = 0)
+
+    # Only for solar
+    phi_[~idx_hours_[:t]] = 0.
+    psi_[~idx_hours_]     = 0.
+
+    # d: Euclidean distance between samples weighted by importance weights
+    d_f_ = _euclidian_dist(F_tr_[:, :t], f_, w_ = phi_)
+    d_e_ = _euclidian_dist(E_tr_, e_, w_ = psi_)
+    d_h_ = _haversine_dist(x_, x_tr_)
+    d_p_ = _periodic_dist(t_tr_, t_ts)
+    # print(x_tr_.shape, x_ts_.shape, d_s_.shape)
+    # print(t_tr_.shape, t_ts_.shape, d_t_.shape)
+
+    # w: normalized weights distance across observations based exponential
+    # link function
+    w_f_ = _rbf_kernel(d_f_, length_scale_f)
+    w_e_ = _rbf_kernel(d_e_, length_scale_e)
+    W_   = np.stack([w_f_, w_e_])
+
+    Gamma = _periodic_dist(t_ts, t_ts + gamma)
+
+    (w_, 
+    idx_1_, 
+    idx_2_, 
+    idx_3_, 
+    idx_4_, 
+    sigma) = _scenario_filtering(W_, d_h_, d_p_, Gamma, xi, kappa_min, kappa_max)
+
+    #eta_ = _logistic(s_ - t*5 - nu*60., trust_rate)
+    eta_ = _LIE(s_[::-1], t, T, nu, trust_rate)
+
+    # Fuse scenarios with day-ahead forecasts
+    M_   = np.zeros((idx_4_.shape[0], eta_.shape[0]))
+    m_0_ = np.zeros((idx_4_.shape[0], 1))
+    for i, j in zip(idx_4_, range(idx_4_.shape[0])):
+        M_[j, :] = F_tr_[i, t:]*(1. - eta_) + E_tr_[i, t:]*eta_
+        m_0_[j]  = F_tr_[i, t - 1]
+
+    w_p_         = w_[idx_4_]/w_[idx_4_].sum()
+    focal_curve_ = M_.T @ w_p_
+    
+    _meta = {
+        'phi': phi_,
+        'psi': psi_,
+        'eta': eta_,
+        'd_f': d_f_,
+        'd_e': d_e_,
+        'd_h': d_h_,
+        'd_p': d_p_,
+        'w_f': w_f_,
+        'w_e': w_e_,
+        'w': w_,
+        'idx_1': idx_1_,
+        'idx_2': idx_2_,
+        'idx_3': idx_3_,
+        'idx_4': idx_4_,
+        'xi': xi,
+        't_ts': t_ts,
+        'gamma': gamma,
+        'Gamma': Gamma,
+        'sigma': sigma,
+        'm_0': m_0_,
+        'focal_curve': focal_curve_,
+    }
+
+    return _meta, M_
+
