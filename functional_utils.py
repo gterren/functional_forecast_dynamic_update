@@ -5,7 +5,6 @@ import numpy as np
 import pickle as pkl
 
 from statsmodels.distributions.empirical_distribution import ECDF
-from numba import njit, prange
 
 path_to_fPCA   = '/Users/Guille/Desktop/dynamic_update/software/fPCA'
 path_to_fDepth = '/Users/Guille/Desktop/dynamic_update/software/fDepth'

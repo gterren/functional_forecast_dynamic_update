@@ -4,6 +4,44 @@ import numpy as np
 from scipy.integrate import quad
 from scipy.stats import multivariate_normal, norm
 
+from statsmodels.distributions.empirical_distribution import ECDF
+
+import numpy as np
+
+def _energy_score(Y_ensamble_, y_, beta = 1.):
+    """
+    Energy Score for an ensemble forecast.
+    
+    Parameters
+    ----------
+    Y_ensamble_ : (m, d) array
+        m scenarios in d dimensions.
+    y_ : (d,) array
+        observation vector.
+    beta : float
+        exponent in (0, 2]. beta=1 is standard energy score.
+        Uses ||x - y||^beta.
+
+    Returns
+    -------
+    float
+        Energy score (lower is better).
+    """
+
+    m, d = Y_ensamble_.shape
+
+    # term1 = mean ||Xi - y||^beta
+    term1 = np.mean(np.linalg.norm(Y_ensamble_ - y_, axis=1) ** beta)
+
+    # term2 = 0.5 * mean_{i,j} ||Xi - Xj||^beta
+    # compute pairwise distances efficiently via broadcasting
+    X_ = Y_ensamble_[:, None, :] - Y_ensamble_[None, :, :]
+
+    term2 = 0.5 * np.mean(np.linalg.norm(X_, axis=2) ** beta)
+
+    return term1 - term2
+
+
 def _interval_score(y_true, forecast_mean, forecast_std, z, alpha):
     """
     Calculate the interval score for probabilistic forecasts with an interval [lower, upper].
@@ -90,23 +128,6 @@ def _crps_monte_carlo(y_true, forecast_samples):
 
     return np.array(crps_)
 
-def _pit(y_true, forecast_mean, forecast_std):
-    """
-    Calculate the Probabily Integral Transform (PIT) for a probabilistic forecast.
-    
-    Parameters:
-    - y_true: Observed (true) values
-    - forecast_mean: Mean of the predicted distribution (e.g., mean of the normal distribution)
-    - forecast_std: Standard deviation of the predicted distribution
-    
-    Returns:
-    - mean and std: The calculated PIT
-    """
-            
-    u_samples = norm.cdf(y_true, loc=forecast_mean, scale=forecast_std)
-
-    return np.array([u_samples.mean(), u_samples.std()])
-
 
 def _coverage_score(y_true, forecast_mean, forecast_std, z, alpha):
     """
@@ -151,10 +172,9 @@ def _KS(pit_, nbins = 20):
     - ks: Kolmogorov–Smirnov statistic
     """
 
-    y_ = np.concatenate(pit_, axis = 0)
-    N  = y_.shape[0]
+    N  = pit_.shape[0]
 
-    z_, x_ = np.histogram(y_, 
+    z_, x_ = np.histogram(pit_, 
                           bins = nbins, 
                           range = (0.0, 1.0))
     
@@ -175,6 +195,7 @@ def _empirical_coverage_score(y_true, lower_, upper_):
             coverage += 1
     return coverage / y_true.shape[0]
 
+
 def _normal_PIT(y_true_, Y_ensambles_):
     """
     Calculate the Probabilistic Integral Transform (PIT) under normal distribution.
@@ -189,46 +210,29 @@ def _normal_PIT(y_true_, Y_ensambles_):
     std_  = np.std(Y_ensambles_, axis = 1)
     return norm.cdf(y_true_, loc = mean_, scale = std_)
 
-def _empirical_PIT(y_obs, Y_ens):
+def _empirical_PIT(y_obs, Y_ens, seed=1234):
     """
     Vectorized PIT for many cases.
     obs:  shape (N,)
     preds: shape (N, M) — row i are forecast samples for case i
     returns: array (N,) with PIT values in (0,1)
     """
-    y_obs = np.asarray(y_obs)
-    Y_ens = np.asarray(Y_ens)
+    y_obs = np.around(np.asarray(y_obs), 4)
+    Y_ens = np.around(np.asarray(Y_ens), 4)
     N, M  = Y_ens.shape
     u_ = np.zeros((N, ))
-    for i in range(N):
-        ecdf   = ECDF(Y_ens[i, :])
-        u_[i,] = ecdf(y_obs[i])  
-        
-    return u_
 
-
-def _randomized_PIT(y, ens, seed=1234):
-    """
-    Vectorized randomized PIT for:
-      y:   array (T,)
-      ens: array (T, N)
-    Returns:
-      pit: array (T,)
-    """
-    y = np.asarray(y)
-    ens = np.asarray(ens)
-    T, N = ens.shape
-    
+    # Create a new random number generator
     rng = np.random.default_rng(seed)
-    pit = np.empty(T)
-    
-    for t in range(T):
-        ens_sorted = np.sort(ens[t])
-        k = np.searchsorted(ens_sorted, y[t], side="right")
-        u = rng.uniform(0.0, 1.0)
-        pit[t] = (k + u) / (N + 1)
-    
-    return pit
+
+    for i in range(N):
+        _right_ecdf = ECDF(Y_ens[i, :], side='right')
+        _left_ecdf  = ECDF(Y_ens[i, :], side='left')
+
+        u_[i,]  = _right_ecdf(y_obs[i])  
+        u_[i,] -= (_right_ecdf(y_obs[i]) - _left_ecdf(y_obs[i]))*rng.random()
+
+    return u_
 
 
 def _empirical_interval_score(y_true, y_pred_lower, y_pred_upper, alpha):
