@@ -218,19 +218,19 @@ def _scenario_filtering(w_, d_h_, xi, kappa_min, kappa_max):
 
 
 def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t_ts,
-                                  forget_rate_f = 1.,
-                                  forget_rate_e = .5,
-                                  length_scale_f = .1,
-                                  length_scale_e = .75,
-                                  lookup_rate = .05,
-                                  trust_rate = 0.0175,
-                                  nu = 340,
-                                  gamma = 30,
-                                  xi = 0.99,
-                                  kappa_min = 500,
-                                  kappa_max = 1500,
+                                  forget_rate_f = None,
+                                  forget_rate_e = None,
+                                  length_scale_f = None,
+                                  length_scale_e = None,
+                                  lookup_rate = None,
+                                  trust_rate = None,
+                                  nu = None,
+                                  gamma = None,
+                                  xi = None,
+                                  kappa_min = None,
+                                  kappa_max = None,
                                   idx_hours_ = False,     
-                                  p_fusion = 0.):
+                                  p_fusion = None):
 
     kappa_min = int(kappa_min)
     kappa_max = int(kappa_max)
@@ -293,6 +293,7 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     E_ = np.zeros((idx_spatial_.shape[0], eta_.shape[0]))
 
     m_0_ = np.zeros((idx_spatial_.shape[0], 1))
+    eps = 1e-8
     for i, j in zip(idx_spatial_, range(idx_spatial_.shape[0])):
 
         F_[j, :] = F_tr_p_[i, t:] 
@@ -300,13 +301,12 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
         m_0_[j]  = F_tr_p_[i, t - 1]
 
         p0 = np.sum(F_[j, :] == 0)/F_[j, :].shape[0]
-        pf = p_fusion*np.nan_to_num((1. - trust_rate)/(1. - p0), 1)
-        u  = np.random.uniform(0.0, 1.0, size=1)[0]
-
-        if (u < pf) and (pf > 0.):
+        pf = p_fusion * (1. - trust_rate) / np.clip(1. - p0, eps, 1. - eps)
+        u  = np.random.uniform(0., 1., size=1)[0]
+        if u < pf:
             M_[j, :] = F_[j, :]
         else:
-            M_[j, :] = F_[j, :] * (1. - eta_)  + E_[j, :] * eta_
+            M_[j, :] = F_[j, :] * (1. - eta_) + E_[j, :] * eta_
 
     w_p_         = w_[idx_spatial_]/w_[idx_spatial_].sum()
     focal_curve_ = M_.T @ w_p_
@@ -321,6 +321,7 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
              'w_f': w_f_,
              'w_e': w_e_,
              'w': w_,
+             'w_p': w_p_,
              'idx_temporal': idx_temporal_,
              'idx_neigbors': idx_neigbors_,
              'idx_spatial': idx_spatial_,

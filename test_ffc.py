@@ -9,11 +9,12 @@ from mpi4py import MPI
 
 from ffc_utils import _fknn_forecast_dynamic_update
 
-
 from functional_utils import _confidence_bands_from_eCDF
 
-from scores_utils import (_empirical_coverage_score,
-                          _weighted_empirical_interval_score)
+from scores_utils import (_empirical_PIT, 
+                          _KS, 
+                          _weighted_empirical_interval_score,
+                          _energy_score)
 
 path_to_fDepth    = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
 path_to_data      = '/home/gterren/dynamic_update/data'
@@ -21,7 +22,7 @@ path_to_test      = '/home/gterren/dynamic_update/test'
 path_to_param     = '/home/gterren/dynamic_update/params'
 path_to_ensambles = '/home/gterren/dynamic_update/ensambles'
 
-def _save_validation_csv(df_new_, path_to_file):
+def _save_test_csv(df_new_, path_to_file):
 
     # Check if the CSV exists
     if os.path.exists(path_to_file):
@@ -35,8 +36,7 @@ def _save_validation_csv(df_new_, path_to_file):
     df_new_.to_csv(path_to_file, index = False)
     print(path_to_file)
 
-
-def _save_validation_pickle(_new_dict, path_to_file):
+def _save_test_pickle(_new_dict, path_to_file):
     """Load dict from pickle if it exists, merge with new_dict, and save back."""
     
     # If file exists, load existing dict and merge
@@ -93,14 +93,13 @@ i_job, N_jobs, _comm = _get_node_info()
 
 # Calibration experiments setup
 resource = sys.argv[1]
-method   = sys.argv[2] 
-time     = int(sys.argv[3])
+method = sys.argv[2] 
+time = int(sys.argv[3])
 
 # Validation set identifier
-val = 'iter_1'  
+val = 2
 # Assets in the calibration experiments
 assets_ = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
-#assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 # Significance levels for the confidence intervals
 alpha_ = [0.1, 0.2, 0.3, 0.4]
 
@@ -145,21 +144,30 @@ p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
 p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
 # print(p_tr_.shape, p_ts_.shape)
 
+F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
+F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
 E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
 E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-# print(E_tr_.min(), E_tr_.max())
-# print(E_ts_.min(), E_ts_.max())
 
 # No possible a capacity factor is larger than 1 or smaller than 0
+F_tr_[F_tr_ > 1.] = 1.
+F_ts_[F_ts_ > 1.] = 1.
 E_tr_[E_tr_ > 1.] = 1.
-E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ > 1.] = 1.
+
+F_tr_[F_tr_ < 0.] = 0.
+F_ts_[F_ts_ < 0.] = 0.
+E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ < 0.] = 0.
+
+F_tr_ /= F_tr_.max()
+F_ts_ /= F_ts_.max()
+E_tr_ /= E_tr_.max()
+E_ts_ /= E_ts_.max()
 
 # Format training set from day x interval x asset to [day * asset] x interval
 E_ts_lin_ = E_ts_.copy()
-E_tr_lin_ = np.concatenate([E_tr_[..., k] 
-                            for k in range(E_tr_.shape[2])], axis = 0)
+E_tr_lin_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
 #print(E_tr_lin_.shape, E_ts_lin_.shape)
 
 # Load 2017 data as training set
@@ -218,20 +226,22 @@ F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
 E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
 F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
 E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-# print(F_tr_.min(), F_tr_.max())
-# print(E_tr_.min(), E_tr_.max())
-# print(F_ts_.min(), F_ts_.max())
-# print(E_ts_.min(), E_ts_.max())
 
 # No possible a capacity factor is larger than 1 or smaller than 0
 F_tr_[F_tr_ > 1.] = 1.
-F_tr_[F_tr_ < 0.] = 0.
 F_ts_[F_ts_ > 1.] = 1.
-F_ts_[F_ts_ < 0.] = 0.
 E_tr_[E_tr_ > 1.] = 1.
-E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ > 1.] = 1.
+
+F_tr_[F_tr_ < 0.] = 0.
+F_ts_[F_ts_ < 0.] = 0.
+E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ < 0.] = 0.
+
+F_tr_ /= F_tr_.max()
+F_ts_ /= F_ts_.max()
+E_tr_ /= E_tr_.max()
+E_ts_ /= E_ts_.max()
 
 # Format training set from day x interval x asset to [day * asset] x interval
 T_tr_ = np.concatenate([T_tr_ for k in range(assets_tr_.shape[0])], axis = 0)
@@ -246,20 +256,16 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_{val}.csv')
-hyper_         = hyper_.set_index("parameter")
+hyper_ = pd.read_csv(path_to_param + f'/{resource}/{resource}-{method}-params_val_{val}.csv')
+hyper_ = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
 
-#hyper_.loc['forget_rate_f'][time] = [0.0625, 0.125, 0.25, 0.5, 1., 2., 3., 4., 5., 6., 7., 8.][i_param]
-#hyper_.loc['length_scale_f'][time] = [0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5][i_param]
-#hyper_.loc['gamma'][time] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120][i_param]
-#hyper_.loc['xi'][time] = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.975, 0.99][i_param]
-#hyper_.loc['kappa_min'][time] = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130][i_param]
-#hyper_.loc['kappa_max'][time] = [75, 100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500][i_param]
-
 # Test setup
-dfs_ = []
-_ensambles = {}     
+WIS_ = []
+KS_  = []
+PIT_ = []
+_ensambles = {}   
+
 asset = assets_[i_job]
 for day in range(363):
     file_name = f'{asset}-{day}-{time}'
@@ -285,40 +291,33 @@ for day in range(363):
                     + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
         
         _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                  forget_rate_f  = hyper_.loc['forget_rate_f'][time],
-                                                  forget_rate_e  = hyper_.loc['forget_rate_e'][time],
+                                                  forget_rate_f = hyper_.loc['forget_rate_f'][time],
+                                                  forget_rate_e = hyper_.loc['forget_rate_e'][time],
                                                   length_scale_f = hyper_.loc['length_scale_f'][time],
                                                   length_scale_e = hyper_.loc['length_scale_e'][time],
-                                                  lookup_rate    = hyper_.loc['lookup_rate'][time],
-                                                  trust_rate     = hyper_.loc['trust_rate'][time],
-                                                  nu             = hyper_.loc['nu'][time],
-                                                  gamma          = hyper_.loc['gamma'][time],
-                                                  xi             = hyper_.loc['xi'][time],
-                                                  kappa_min      = hyper_.loc['kappa_min'][time],
-                                                  kappa_max      = hyper_.loc['kappa_max'][time], 
-                                                  idx_hours_     = idx_hours_)
-
-        f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
-        f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
+                                                  lookup_rate = hyper_.loc['lookup_rate'][time],
+                                                  trust_rate = hyper_.loc['trust_rate'][time],
+                                                  nu = hyper_.loc['nu'][time],
+                                                  gamma = hyper_.loc['gamma'][time],
+                                                  xi = hyper_.loc['xi'][time],
+                                                  kappa_min = hyper_.loc['kappa_min'][time],
+                                                  kappa_max = hyper_.loc['kappa_max'][time], 
+                                                  p_fusion = hyper_.loc['p_fusion'][time],
+                                                  idx_hours_ = idx_hours_)
 
         # Confidence bands from marginal empirical density function
         m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
 
         # Testing WIS
-        WIS_e = np.mean(_weighted_empirical_interval_score(e_[time:], m_, _lower, _upper, alpha_))
-        WIS_f = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
+        WIS = np.mean(_weighted_empirical_interval_score(f_hat_, m_, _lower, _upper, alpha_))
+        PIT = _empirical_PIT(f_hat_, M_.T, seed = 1234)
+        RMSE = np.sqrt(np.mean((_meta['focal_curve'] - e_[time:])**2))
+        MBE = np.mean(f_hat_ - _meta['focal_curve'])
+        ES = _energy_score(M_, f_hat_)
 
         # Save results
-        dfs_.append([time, 
-                     asset, 
-                     day, 
-                     x_[0], 
-                     x_[1], 
-                     M_.shape[0], 
-                     float(WIS_e), 
-                     float(WIS_f), 
-                     float(f_tau_rmse), 
-                     float(f_s_rmse)])
+        WIS_.append([time, asset, day, x_[0], x_[1], M_.shape[0], WIS, RMSE, MBE, ES])
+        PIT_.append(PIT)
         
         _ensambles[file_name] = [f_hat_, M_]
 
@@ -328,25 +327,75 @@ for day in range(363):
         traceback.print_exc()
         # loop continues automatically
 
-dfs_ = pd.DataFrame(dfs_, columns = ['time', 
+PIT_ = np.stack(PIT_, axis = 0)
+
+KS1 = _KS(PIT_[:, 1*12])
+KS2 = _KS(PIT_[:, 2*12])
+KS3 = _KS(PIT_[:, 3*12])
+KS4 = _KS(PIT_[:, 4*12])
+
+KS_.append([time, asset, x_[0], x_[1], KS1, KS2, KS3, KS4])
+
+WIS_ = pd.DataFrame(WIS_, columns = ['time', 
                                      'asset', 
                                      'day', 
                                      'lon',
                                      'lat',
                                      'n_scenarios', 
-                                     'WIS_e', 
-                                     'WIS_f', 
-                                     'RMSE_tau', 
-                                     'RMSE_s'])
+                                     'WIS', 
+                                     'RMSE', 
+                                     'MBE', 
+                                     'ES'])
 
-dfs_['resource'] = resource
-dfs_['method']   = method
+KS_ = pd.DataFrame(KS_, columns = ['time', 
+                                   'asset', 
+                                   'lon',
+                                   'lat',
+                                   'KS1',
+                                   'KS2',
+                                   'KS3',
+                                   'KS4'])
 
-dfs_       = _gather_node_dataframes(_comm, dfs_)
+print(i_job, resource, method, WIS_.shape, KS_.shape)
+
+WIS_['resource'] = resource
+WIS_['method'] = method
+WIS_['hyper'] = val
+KS_['resource'] = resource
+KS_['method'] = method
+KS_['hyper'] = val
+
+WIS_ = _gather_node_dataframes(_comm, WIS_)
+KS_ = _gather_node_dataframes(_comm, KS_)
+
 _ensambles = _gather_node_dict(_comm, _ensambles)
 
 if i_job == 0:
-    print(hyper_[time])
-    print(dfs_.groupby(['resource', 'method', 'time']).agg({'WIS_f': 'median'}).reset_index(drop = False))
-    _save_validation_csv(dfs_, path_to_file = path_to_test + f'/{resource}-{method}-test_ffc_{val}.csv')
-    #_save_validation_pickle(_ensambles, path_to_file = path_to_ensambles + f'/{resource}-{method}-iter_1-test_ffc.pkl')
+
+    WIS_ = WIS_.groupby(['resource', 
+                         'method', 
+                         'time',
+                         'hyper']).agg({'WIS': 'median',
+                                        'RMSE': 'median',
+                                        'MBE': 'median',
+                                        'ES': 'median'}).reset_index(drop = False)
+    print(WIS_)
+
+    KS_ = KS_.groupby(['resource', 
+                       'method', 
+                       'time',
+                       'hyper']).agg({'KS1': 'median', 
+                                      'KS2': 'median', 
+                                      'KS3': 'median',
+                                      'KS4': 'median'}).reset_index(drop = False)
+
+    KS_['KS'] = KS_['KS1'] + KS_['KS2'] + KS_['KS3'] + KS_['KS4']
+
+    print(KS_)
+
+    df_ = WIS_.merge(KS_,
+                     on=["resource", "method", "time", "hyper"],
+                     how="left")
+
+    _save_test_csv(df_, path_to_file = path_to_test + f'/{resource}-test_ffc.csv')
+    #_save_test_pickle(_ensambles, path_to_file = path_to_ensambles + f'/{resource}-{method}-iter_1-test_ffc.pkl')

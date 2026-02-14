@@ -9,16 +9,20 @@ from itertools import product
 from mpi4py import MPI
 
 from skfda.exploratory.depth import ModifiedBandDepth
-from functional_utils import _confidence_bands_from_eCDF
 
 from ffc_utils import (_fknn_forecast_dynamic_update,
                        _functional_downsampling, 
                        _focal_curve_envelope, 
                        _functional_confidence_band)
 
+from functional_utils import _confidence_bands_from_eCDF
 
-from scores_utils import (_empirical_coverage_score,
-                          _empirical_interval_score)
+from scores_utils import (_empirical_PIT, 
+                          _KS, 
+                          _weighted_empirical_interval_score,
+                          _empirical_interval_score,
+                          _empirical_coverage_score,
+                          _energy_score)
 
 path_to_fDepth     = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
 path_to_data       = '/home/gterren/dynamic_update/data'
@@ -26,7 +30,7 @@ path_to_validation = '/home/gterren/dynamic_update/validation'
 path_to_param      = '/home/gterren/dynamic_update/params'
 path_to_test       = '/home/gterren/dynamic_update/test'
 
-def _save_validation_csv(df_new_, path_to_file):
+def _save_test_csv(df_new_, path_to_file):
 
     # Check if the CSV exists
     if os.path.exists(path_to_file):
@@ -68,12 +72,13 @@ i_job, N_jobs, _comm = _get_node_info()
 
 # Calibration experiments setup
 resource = sys.argv[1]
-method   = sys.argv[2] 
-dist     = sys.argv[3]
-time     = int(sys.argv[4])
+method = sys.argv[2] 
+time = int(sys.argv[3])
+dist = sys.argv[4]
 
 # Validation set identifier
-val = 'iter_1'  
+val = 1
+val_envelop = 1
 # Assets in the calibration experiments
 assets_ = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
 # Significance levels for the confidence intervals
@@ -121,21 +126,30 @@ p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
 p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
 # print(p_tr_.shape, p_ts_.shape)
 
+F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
+F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
 E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
 E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-# print(E_tr_.min(), E_tr_.max())
-# print(E_ts_.min(), E_ts_.max())
 
 # No possible a capacity factor is larger than 1 or smaller than 0
+F_tr_[F_tr_ > 1.] = 1.
+F_ts_[F_ts_ > 1.] = 1.
 E_tr_[E_tr_ > 1.] = 1.
-E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ > 1.] = 1.
+
+F_tr_[F_tr_ < 0.] = 0.
+F_ts_[F_ts_ < 0.] = 0.
+E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ < 0.] = 0.
+
+F_tr_ /= F_tr_.max()
+F_ts_ /= F_ts_.max()
+E_tr_ /= E_tr_.max()
+E_ts_ /= E_ts_.max()
 
 # Format training set from day x interval x asset to [day * asset] x interval
 E_ts_lin_ = E_ts_.copy()
-E_tr_lin_ = np.concatenate([E_tr_[..., k] 
-                            for k in range(E_tr_.shape[2])], axis = 0)
+E_tr_lin_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
 #print(E_tr_lin_.shape, E_ts_lin_.shape)
 
 # Load 2017 data as training set
@@ -194,20 +208,22 @@ F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
 E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
 F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
 E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-# print(F_tr_.min(), F_tr_.max())
-# print(E_tr_.min(), E_tr_.max())
-# print(F_ts_.min(), F_ts_.max())
-# print(E_ts_.min(), E_ts_.max())
 
 # No possible a capacity factor is larger than 1 or smaller than 0
 F_tr_[F_tr_ > 1.] = 1.
-F_tr_[F_tr_ < 0.] = 0.
 F_ts_[F_ts_ > 1.] = 1.
-F_ts_[F_ts_ < 0.] = 0.
 E_tr_[E_tr_ > 1.] = 1.
-E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ > 1.] = 1.
+
+F_tr_[F_tr_ < 0.] = 0.
+F_ts_[F_ts_ < 0.] = 0.
+E_tr_[E_tr_ < 0.] = 0.
 E_ts_[E_ts_ < 0.] = 0.
+
+F_tr_ /= F_tr_.max()
+F_ts_ /= F_ts_.max()
+E_tr_ /= E_tr_.max()
+E_ts_ /= E_ts_.max()
 
 # Format training set from day x interval x asset to [day * asset] x interval
 T_tr_ = np.concatenate([T_tr_ for k in range(assets_tr_.shape[0])], axis = 0)
@@ -222,24 +238,20 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_         = pd.read_csv(path_to_param + f'/{resource}-{method}-params_{val}.csv')
-hyper_         = hyper_.set_index("parameter")
+hyper_ = pd.read_csv(path_to_param + f'/{resource}/{resource}-{method}-params_val_{val}.csv')
+hyper_ = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
 print(hyper_)
 
-FCS_envelop_ = pd.read_csv(path_to_param + f'/{resource}-{method}-FCS_envelop_{val}.csv')
-print(FCS_envelop_)
+hyper_envelop_ = pd.read_csv(path_to_param + f'/{resource}/{resource}-{method}-envelop_val_{val_envelop}.csv')
+print(hyper_envelop_)
 
-FIS_envelop_ = pd.read_csv(path_to_param + f'/{resource}-{method}-FIS_envelop_{val}.csv')
-print(FIS_envelop_)
-
-FIS_ = []
-FCS_ = []
+FS_ = []
 asset = assets_[i_job]
 for day in range(363):
 
     file_name = f'{asset}-{day}-{time}'
-    print(i_job, file_name)
+    #print(i_job, file_name)
 
     try:
 
@@ -257,23 +269,19 @@ for day in range(363):
                     + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
 
         _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
-                                                forget_rate_f  = hyper_.loc['forget_rate_f'][time],
-                                                forget_rate_e  = hyper_.loc['forget_rate_e'][time],
-                                                length_scale_f = hyper_.loc['length_scale_f'][time],
-                                                length_scale_e = hyper_.loc['length_scale_e'][time],
-                                                lookup_rate    = hyper_.loc['lookup_rate'][time],
-                                                trust_rate     = hyper_.loc['trust_rate'][time],
-                                                nu             = hyper_.loc['nu'][time],
-                                                gamma          = hyper_.loc['gamma'][time],
-                                                xi             = hyper_.loc['xi'][time],
-                                                kappa_min      = hyper_.loc['kappa_min'][time],
-                                                kappa_max      = hyper_.loc['kappa_max'][time], 
-                                                idx_hours_     = idx_hours_)
-
-        f_tau_rmse = np.sqrt(np.mean((f_ - e_[:time])**2))
-        f_s_rmse   = np.sqrt(np.mean((np.median(M_, axis = 0) - e_[time:])**2))
-
-        # Marginal Evaluation
+                                                  forget_rate_f = hyper_.loc['forget_rate_f'][time],
+                                                  forget_rate_e = hyper_.loc['forget_rate_e'][time],
+                                                  length_scale_f = hyper_.loc['length_scale_f'][time],
+                                                  length_scale_e = hyper_.loc['length_scale_e'][time],
+                                                  lookup_rate = hyper_.loc['lookup_rate'][time],
+                                                  trust_rate = hyper_.loc['trust_rate'][time],
+                                                  nu = hyper_.loc['nu'][time],
+                                                  gamma = hyper_.loc['gamma'][time],
+                                                  xi = hyper_.loc['xi'][time],
+                                                  kappa_min = hyper_.loc['kappa_min'][time],
+                                                  kappa_max = hyper_.loc['kappa_max'][time], 
+                                                  p_fusion = hyper_.loc['p_fusion'][time], 
+                                                  idx_hours_ = idx_hours_)
 
         # Confidence bands from marginal empirical density function
         m_, _upper, _lower = _confidence_bands_from_eCDF(M_, alpha_)
@@ -281,53 +289,39 @@ for day in range(363):
         # Functional Evaluation
         m_0_ = np.ones(_meta['m_0'].shape)*f_[-1]
         M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, m_0_, dt_,
-                                                                    subsample = 12,
-                                                                    n_basis   = int(M_.shape[1]/5)) 
+                                                                  subsample = 12,
+                                                                  n_basis = int(M_.shape[1]/5)) 
 
         if dist == 'fknn':
-            dist_ = _meta['w'][_meta['idx_4']]
+            #dist_ = _meta['w'][_meta['idx_4']]
+            dist_ = _meta['w_p']
         else:
             dist_ = dist
 
         J_ = _focal_curve_envelope(ModifiedBandDepth(), 
-                                    Y_       = M_interp_.T, 
-                                    dt_      = dt_[-M_interp_.shape[1]:], 
-                                    dist_    = dist_,
-                                    max_iter = 100).T
+                                   Y_ = M_interp_.T, 
+                                   dt_ = dt_[-M_interp_.shape[1]:], 
+                                   dist_ = dist_,
+                                   max_iter = 100).T
         
         for alpha in alpha_:
 
             # FIS results
-            idx_ = ((FIS_envelop_['alpha'] == alpha)
-                    & (FIS_envelop_['time'] == time)
-                    & (FIS_envelop_['distance'] == dist))
+            idx_ = ((hyper_envelop_['alpha'] == alpha)
+                    & (hyper_envelop_['time'] == time)
+                    & (hyper_envelop_['distance'] == dist))
 
-            fraction = FIS_envelop_.loc[idx_, 'fraction'].to_numpy()[0]
-            k        = int(fraction*M_.shape[0])
+            fraction = hyper_envelop_.loc[idx_, 'fraction'].to_numpy()[0]
+            k = int(fraction*M_.shape[0])
 
             m_, u_, l_ = _functional_confidence_band(J_, k)
             FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
+            FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
 
             u_, l_ = _upper[f'{alpha}'], _lower[f'{alpha}']
             MIS = _empirical_interval_score(f_hat_, l_, u_, alpha).sum()
 
-            FIS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS, MIS])
-
-            # CIS results
-            idx_ = ((FCS_envelop_['alpha'] == alpha)
-                    & (FCS_envelop_['time'] == time)
-                    & (FCS_envelop_['distance'] == dist))
-            
-            fraction = FCS_envelop_.loc[idx_, 'fraction'].to_numpy()[0]
-            k        = int(fraction*M_.shape[0])
-
-            m_, u_, l_ = _functional_confidence_band(J_, k)
-            FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
-
-            u_, l_ = _upper[f'{alpha}'], _lower[f'{alpha}']
-            MCS = _empirical_coverage_score(f_hat_, l_, u_)
-
-            FCS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FCS, MCS])
+            FS_.append([time, asset, day, alpha, k, fraction, dist, M_.shape[0], J_.shape[0], FIS, FCS, MIS])
 
     except Exception as e:
         print(f"Error for asset={asset}, day={day}, file={file_name}")
@@ -335,7 +329,7 @@ for day in range(363):
         traceback.print_exc()
         # loop continues automatically
 
-FCS_ = pd.DataFrame(FCS_, columns = ['time', 
+FS_ = pd.DataFrame(FS_, columns = ['time', 
                                      'asset', 
                                      'day', 
                                      'alpha', 
@@ -344,26 +338,32 @@ FCS_ = pd.DataFrame(FCS_, columns = ['time',
                                      'distance',
                                      'n_scen', 
                                      'n_scen_evenlop', 
-                                     'FCS', 
+                                     'FIS', 
+                                     'FCS',
                                      'MCS'])
 
-FIS_ = pd.DataFrame(FIS_, columns = ['time', 
-                                     'asset', 
-                                     'day', 
-                                     'alpha', 
-                                     'k', 
-                                     'fraction', 
-                                     'distance',
-                                     'n_scen', 
-                                     'n_scen_evenlop', 
-                                     'FIS',
-                                     'MIS'])
+print(i_job, resource, dist, FS_.shape)
 
-print(i_job, resource, dist, FIS_.shape, FIS_.shape)
+FS_['resource'] = resource
+FS_['method'] = method
+FS_['distance'] = dist
+FS_['hyper'] = val
+FS_['hyper_envelop'] = val_envelop
 
-FCS_ = _gather_node_data(_comm, FCS_)
-FIS_ = _gather_node_data(_comm, FIS_)
+FS_ = _gather_node_data(_comm, FS_)
 
 if i_job == 0:
-    _save_validation_csv(FCS_, path_to_file = path_to_test + f'/{resource}-{method}-{dist}-FCS_test_envelop_{val}.csv')
-    _save_validation_csv(FIS_, path_to_file = path_to_test + f'/{resource}-{method}-{dist}-FIS_test_envelop_{val}.csv')
+
+    FS_ = FS_.groupby(['resource', 
+                       'method', 
+                       'distance',
+                       'time',
+                       'alpha',
+                       'fraction',
+                       'hyper',
+                       'hyper_envelop']).agg({'FIS': 'median',
+                                              'FCS': 'median', 
+                                              'MCS': 'median'}).reset_index(drop = False)
+    print(FS_)
+
+    _save_test_csv(FS_, path_to_file = path_to_test + f'/{resource}/{resource}-{method}-test_envelop.csv')

@@ -5,6 +5,8 @@ from scipy.integrate import quad
 from scipy.stats import multivariate_normal, norm
 
 from statsmodels.distributions.empirical_distribution import ECDF
+from sklearn.neighbors import KernelDensity
+from scipy import stats
 
 import numpy as np
 
@@ -159,32 +161,38 @@ def _coverage_score(y_true, forecast_mean, forecast_std, z, alpha):
     return coverage #- (1. - 2.*alpha)
 
     
-def _KS(pit_, nbins = 20):
-    """
-    Calculate the Kolmogorov–Smirnov statistic for a normal dist.
+def _KS(pit_):
+    pit_ = np.asarray(pit_, dtype=float)
+    pit_ = pit_[np.isfinite(pit_)]
+    pit_ = np.clip(pit_, 0.0, 1.0)
+    return stats.kstest(pit_, 'uniform').statistic
+
+# def _KS(pit_, nbins = 20):
+#     """
+#     Calculate the Kolmogorov–Smirnov statistic for a normal dist.
     
-    Parameters:
-    - y_true: Observed (true) values
-    - forecast_mean: Mean of the predicted distribution (e.g., mean of the normal distribution)
-    - forecast_std: Standard deviation of the predicted distribution
+#     Parameters:
+#     - y_true: Observed (true) values
+#     - forecast_mean: Mean of the predicted distribution (e.g., mean of the normal distribution)
+#     - forecast_std: Standard deviation of the predicted distribution
     
-    Returns:
-    - ks: Kolmogorov–Smirnov statistic
-    """
+#     Returns:
+#     - ks: Kolmogorov–Smirnov statistic
+#     """
 
-    N  = pit_.shape[0]
+#     N  = pit_.shape[0]
 
-    z_, x_ = np.histogram(pit_, 
-                          bins = nbins, 
-                          range = (0.0, 1.0))
+#     z_, x_ = np.histogram(pit_, 
+#                           bins = nbins, 
+#                           range = (0.0, 1.0))
     
-    # Empirical CDF at upper edge of each bin
-    ecdf_ = np.cumsum(z_) / N         # length nbins
+#     # Empirical CDF at upper edge of each bin
+#     ecdf_ = np.cumsum(z_) / N         # length nbins
 
-    # Theoretical CDF of U(0,1) at those same points
-    cdf_uniform_ = x_[1:]
+#     # Theoretical CDF of U(0,1) at those same points
+#     cdf_uniform_ = x_[1:]
 
-    return np.max(np.abs(ecdf_ - cdf_uniform_))
+#     return np.max(np.abs(ecdf_ - cdf_uniform_))
 
 def _empirical_coverage_score(y_true, lower_, upper_):
     coverage = 0
@@ -350,4 +358,22 @@ def _errors(ac_, fc_):
                                                                                 'MAE', 
                                                                                 'MBE'])
  
-    
+
+# Silverman's Rule
+def _silverman_rule(x_):
+    IQR = np.percentile(x_, 75) - np.percentile(x_, 25)
+    return 0.9 * min(np.std(x_), IQR / 1.34) * x_.shape[0] ** (-1 / 5)
+
+# Evaluate KDE cumulative distribution function
+def _KDE(M_, f_hat_, index_):
+    ll = 0
+    for i in index_:
+        #print(_silverman_rule(M_[:, i]))
+        h = max(_silverman_rule(M_[:, i]), 1e-6)
+        _kde = KernelDensity(bandwidth = h, 
+                             algorithm = "auto", 
+                             kernel = "gaussian").fit(M_[:, i][:, np.newaxis])
+        
+        ll += _kde.score(f_hat_[i][np.newaxis, np.newaxis])
+
+    return ll

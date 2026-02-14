@@ -13,13 +13,14 @@ from functional_utils import _confidence_bands_from_eCDF
 
 from scores_utils import (_empirical_PIT, 
                           _KS, 
+                          _KDE,
                           _weighted_empirical_interval_score,
                           _energy_score)
 
-path_to_fDepth     = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
-path_to_data       = '/home/gterren/dynamic_update/data'
+path_to_fDepth = '/home/gterren/dynamic_update/functional_forecast_dynamic_update/fDepth'
+path_to_data = '/home/gterren/dynamic_update/data'
 path_to_validation = '/home/gterren/dynamic_update/validation'
-path_to_param      = '/home/gterren/dynamic_update/params'
+path_to_param = '/home/gterren/dynamic_update/params'
 
 def _save_validation_csv(df_new_, path_to_file):
 
@@ -66,12 +67,13 @@ def _get_node_info(verbose = False):
 
 # MPI job variables
 i_job, N_jobs, _comm = _get_node_info()
+#i_job = 1
 
 # Calibration experiments setup
 resource = sys.argv[1]
-method   = sys.argv[2] 
-param    = sys.argv[3] 
-time     = int(sys.argv[4])
+method = sys.argv[2] 
+time = int(sys.argv[3])
+param = sys.argv[4] 
 
 # Assets in the calibration experiments
 assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
@@ -92,6 +94,11 @@ E_tr_      = _data["forecasts"]
 F_tr_ = F_tr_.reshape(int(F_tr_.shape[0]/T), T, F_tr_.shape[1])
 E_tr_ = E_tr_.reshape(int(E_tr_.shape[0]/T), T, E_tr_.shape[1])
 #print(F_tr_.shape, E_tr_.shape)
+
+# Unbias training set
+B_tr_ = np.mean(F_tr_ - E_tr_, axis = 0)
+for i in range(E_tr_.shape[-1]):
+    E_tr_[:, :, i] += B_tr_[:, i]
 
 # Load 2018 data as testing set
 with open(path_to_data + f"/linear_preprocessed_{resource}_2018.pkl", 'rb') as f:
@@ -114,6 +121,11 @@ F_ts_  = F_ts_[:, :, idx_]
 E_ts_  = E_ts_[:, :, idx_]
 #print(F_ts_.shape, E_ts_.shape)
 
+# Unbias testing set
+B_ts_ = np.mean(F_ts_ - E_ts_, axis = 0)
+for i in range(E_ts_.shape[-1]):
+    E_ts_[:, :, i] += B_ts_[:, i]
+
 # From generation to capacity factor
 p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
 p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
@@ -123,10 +135,6 @@ F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
 F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
 E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
 E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-print(F_tr_.min(), F_tr_.max())
-print(F_ts_.min(), F_ts_.max())
-print(E_tr_.min(), E_tr_.max())
-print(E_ts_.min(), E_ts_.max())
 
 # No possble a capacity factor is larger than 1 or smaller than 0
 F_tr_[F_tr_ > 1.] = 1.
@@ -146,8 +154,7 @@ E_ts_ /= E_ts_.max()
 
 # Format training set from day x interval x asset to [day * asset] x interval
 E_ts_lin_ = E_ts_.copy()
-E_tr_lin_ = np.concatenate([E_tr_[..., k] 
-                            for k in range(E_tr_.shape[2])], axis = 0)
+E_tr_lin_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
 #print(E_tr_lin_.shape, E_ts_lin_.shape)
 
 # Load 2017 data as training set
@@ -166,6 +173,11 @@ F_tr_ = F_tr_.reshape(int(F_tr_.shape[0]/T), T, F_tr_.shape[1])
 E_tr_ = E_tr_.reshape(int(E_tr_.shape[0]/T), T, E_tr_.shape[1])
 T_tr_ = dates_tr_.reshape(int(dates_tr_.shape[0]/T), T)
 #print(F_tr_.shape, E_tr_.shape, T_tr_.shape)
+
+# Unbias training set
+B_tr_ = np.mean(F_tr_ - E_tr_, axis = 0)
+for i in range(E_tr_.shape[-1]):
+    E_tr_[:, :, i] += B_tr_[:, i]
 
 # Load 2018 data as testing set
 with open(path_to_data + f"/preprocessed_{resource}_2018.pkl", 'rb') as f:
@@ -197,6 +209,11 @@ F_ts_      = F_ts_[:, :, idx_]
 E_ts_      = E_ts_[:, :, idx_]
 #print(F_ts_.shape, E_ts_.shape, T_ts_.shape)
 
+# Unbias testing set
+B_ts_ = np.mean(F_ts_ - E_ts_, axis = 0)
+for i in range(E_ts_.shape[-1]):
+    E_ts_[:, :, i] += B_ts_[:, i]
+
 # From generation to capacity factor
 p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
 p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
@@ -206,10 +223,6 @@ F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
 F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
 E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
 E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-print(F_tr_.min(), F_tr_.max())
-print(F_ts_.min(), F_ts_.max())
-print(E_tr_.min(), E_tr_.max())
-print(E_ts_.min(), E_ts_.max())
 
 # No possble a capacity factor is larger than 1 or smaller than 0
 F_tr_[F_tr_ > 1.] = 1.
@@ -226,7 +239,6 @@ F_tr_ /= F_tr_.max()
 F_ts_ /= F_ts_.max()
 E_tr_ /= E_tr_.max()
 E_ts_ /= E_ts_.max()
-E_ts_[E_ts_ < 0.] = 0.
 
 # Format training set from day x interval x asset to [day * asset] x interval
 T_tr_ = np.concatenate([T_tr_ for k in range(assets_tr_.shape[0])], axis = 0)
@@ -241,7 +253,7 @@ t_tr_ = np.array([datetime.datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetupl
 t_ts_ = np.array([datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
 #print(t_tr_.shape, t_ts_.shape)
 
-hyper_ = pd.read_csv(path_to_param + f'/{resource}-{method}-params_val.csv')
+hyper_ = pd.read_csv(path_to_param + f'/{resource}-{method}-hyper-3.csv')
 hyper_ = hyper_.set_index("parameter")
 hyper_.columns = hyper_.columns.astype(int)
 
@@ -271,7 +283,7 @@ if param == 'gamma':
     hyper_.loc['gamma', time] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120][i_job]
 
 if param == 'xi':
-    hyper_.loc['xi', time] = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9][i_job]
+    hyper_.loc['xi', time] = [0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.975][i_job]
 
 if param == 'kappa_min':
     hyper_.loc['kappa_min', time] = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130][i_job]
@@ -280,8 +292,7 @@ if param == 'kappa_max':
     hyper_.loc['kappa_max', time] = [75, 100, 125, 150, 175, 200, 250, 500, 750, 1000, 1250, 1500][i_job]
 
 if param == 'p_fusion':
-    hyper_.loc['p_fusion', time] = [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8][i_job]
-
+    hyper_.loc['p_fusion', time] = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75][i_job]
 
 WIS_ = []
 KS_  = []
@@ -297,8 +308,8 @@ for asset in assets_:
             f_ = F_ts_[day, :time, asset]
             e_lin_ = E_ts_lin_[day, :, asset]
             e_ = E_ts_[day, :, asset]
-            x_ = x_ts_[asset, :]
-            t = t_ts_[day]
+            x_ts = x_ts_[asset, :]
+            t_ts = t_ts_[day]
             f_hat_ = F_ts_[day, time:, asset]
 
             # Get time constants
@@ -307,19 +318,21 @@ for asset in assets_:
 
             # Filter solar hours with loading solar set
             idx_days_  = np.absolute(t_tr_ - day) < 7
-            idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) 
-                          + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
+            idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) + np.sum(E_tr_[idx_days_, :], axis = 0)) > 1.
 
-            _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
+            # idx_days_  = np.absolute(t_tr_ - day) < 28
+            # idx_hours_ = np.mean(F_tr_[idx_days_, :], axis = 0) > .25
+
+            _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_ts, t_ts,
                                                       forget_rate_f = hyper_.loc['forget_rate_f'][time],
                                                       forget_rate_e = hyper_.loc['forget_rate_e'][time],
                                                       length_scale_f = hyper_.loc['length_scale_f'][time],
                                                       length_scale_e = hyper_.loc['length_scale_e'][time],
                                                       lookup_rate = hyper_.loc['lookup_rate'][time],
                                                       trust_rate = hyper_.loc['trust_rate'][time],
-                                                      nu = hyper_.loc['nu'][time],
                                                       gamma = hyper_.loc['gamma'][time],
                                                       xi = hyper_.loc['xi'][time],
+                                                      nu = hyper_.loc['nu'][time],
                                                       kappa_min = hyper_.loc['kappa_min'][time],
                                                       kappa_max = hyper_.loc['kappa_max'][time], 
                                                       p_fusion = hyper_.loc['p_fusion'][time],
@@ -333,11 +346,12 @@ for asset in assets_:
             RMSE = np.sqrt(np.mean((_meta['focal_curve'] - e_[time:])**2))
             MBE  = np.mean(f_hat_ - _meta['focal_curve'])
             ES   = _energy_score(M_, f_hat_)
+            LL   = _KDE(M_, f_hat_, index_ = [3, 6, 12, 24, 48])
 
             value = hyper_.loc[param, time].tolist()
 
             # Save results
-            WIS_.append([time, asset, day, param, value, x_[0], x_[1], M_.shape[0], WIS, RMSE, MBE, ES])
+            WIS_.append([time, asset, day, param, value, x_ts[0], x_ts[1], M_.shape[0], WIS, RMSE, MBE, ES, LL])
             PIT_.append(PIT)
 
         except Exception as e:
@@ -348,12 +362,12 @@ for asset in assets_:
 
 PIT_ = np.stack(PIT_, axis = 0)
 
-KS1 = _KS(PIT_[:, 1*12])
-KS2 = _KS(PIT_[:, 2*12])
-KS3 = _KS(PIT_[:, 3*12])
-KS4 = _KS(PIT_[:, 4*12])
+KS1 = _KS(PIT_[:, 1*6])
+KS2 = _KS(PIT_[:, 2*6])
+KS3 = _KS(PIT_[:, 3*6])
+KS4 = _KS(PIT_[:, 4*6])
 
-KS_.append([time, asset, param, value, x_[0], x_[1], KS1, KS2, KS3, KS4])
+KS_.append([time, asset, param, value, x_ts[0], x_ts[1], KS1, KS2, KS3, KS4])
 
 WIS_ = pd.DataFrame(WIS_, columns = ['time', 
                                      'asset', 
@@ -366,7 +380,8 @@ WIS_ = pd.DataFrame(WIS_, columns = ['time',
                                      'WIS', 
                                      'RMSE', 
                                      'MBE', 
-                                     'ES'])
+                                     'ES',
+                                     'LL'])
 
 KS_ = pd.DataFrame(KS_, columns = ['time', 
                                    'asset', 
@@ -396,18 +411,25 @@ if i_job == 0:
                          'method', 
                          'parameter', 
                          'value', 
-                         'time']).agg({'WIS': 'median'}).reset_index(drop = False)
-    print(WIS_)
+                         'time']).agg({'WIS': 'median',
+                                       'RMSE': 'median',
+                                       'MBE': 'median',
+                                       'ES': 'median',
+                                       'LL': 'median'}).reset_index(drop = False)
 
-    KS_ = KS_.groupby(['resource', 
-                       'method', 
-                       'parameter', 
-                       'value', 
-                       'time']).agg({'KS1': 'median', 
-                                     'KS2': 'median', 
-                                     'KS3': 'median',
-                                     'KS4': 'median'}).reset_index(drop = False)
-    print(KS_)
+    KS_ = KS_[['resource', 
+               'method', 
+               'parameter', 
+               'value', 
+               'time', 
+               'KS1', 
+               'KS2', 
+               'KS3', 
+               'KS4']]
+
+    KS_['KS'] = KS_['KS1'] + KS_['KS2'] + KS_['KS3'] + KS_['KS4']
+    df_ = WIS_.merge(KS_,
+                     on=["resource", "method", "parameter", "value", "time"],
+                     how="left")
     
-    _save_validation_csv(WIS_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc-WIS.csv')    
-    _save_validation_csv(KS_, path_to_file = path_to_validation + f'/{resource}-{method}-{param}-validation_ffc-KS.csv')
+    _save_validation_csv(df_, path_to_file = path_to_validation + f'/{resource}/{resource}-validation_ffc_10.csv')
