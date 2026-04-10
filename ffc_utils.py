@@ -91,15 +91,8 @@ def _silverman_rule(x_):
     IQR = np.percentile(x_, 75) - np.percentile(x_, 25)
     return 0.9 * min(np.std(x_), IQR / 1.34) * x_.shape[0] ** (-1 / 5)
 
-# Periodic distance to rank samples by day of the year
-def _periodic_dist(d, gamma, 
-                   day_to_degree = 360/365, 
-                   degree_to_rad = np.pi/180):
-    
-    return np.sin(0.5*day_to_degree*(d - gamma)*degree_to_rad)**2
-
 # Filtering scenarios when they are above the upper threshold or below the lower threshold
-def _scenario_filtering_v2(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max):
+def _scenario_filtering_v1(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max):
 
     status = 0
     sigma  = 0
@@ -156,7 +149,7 @@ def _scenario_filtering_v2(W_, d_h_, d_p_, xi, Gamma, kappa_min, kappa_max):
     return w_, idx_1_, idx_2_, idx_3_, idx_4_, Gamma, sigma, status
 
 # Filtering scenarios when they are above the upper threshold or below the lower threshold
-def _scenario_filtering_v3(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
+def _scenario_filtering_v2(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
 
     sigma  = 0
     idx_spatial_  = None
@@ -193,7 +186,7 @@ def _scenario_filtering_v3(W_, d_h_, d_p_, gamma, xi, kappa_min, kappa_max):
 
 # Filtering scenarios when they are above the upper threshold or 
 # below the lower threshold
-def _scenario_filtering(w_, d_h_, xi, kappa_min, kappa_max):
+def _scenario_filtering_v0(w_, d_h_, xi, kappa_min, kappa_max):
 
     sigma = 0
     # Filter by similarity
@@ -217,23 +210,79 @@ def _scenario_filtering(w_, d_h_, xi, kappa_min, kappa_max):
     return idx_neigbors_, idx_spatial_, sigma
 
 
-def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t_ts,
-                                  forget_rate_f = None,
-                                  forget_rate_e = None,
-                                  length_scale_f = None,
-                                  length_scale_e = None,
-                                  lookup_rate = None,
-                                  trust_rate = None,
-                                  nu = None,
-                                  gamma = None,
-                                  xi = None,
-                                  kappa_min = None,
-                                  kappa_max = None,
-                                  idx_hours_ = False,     
-                                  p_fusion = None):
+# Filtering scenarios when they are above the upper threshold or 
+# below the lower threshold
+def _scenario_filtering(w_, d_h_, d_p_, Gamma, xi, kappa):
 
-    kappa_min = int(kappa_min)
-    kappa_max = int(kappa_max)
+    sigma = 0
+    # Filter by similarity
+    idx_ = np.arange(w_.shape[0], dtype = int)
+    idx_neighbors_ = idx_[w_ >= xi]
+    idx_temporal_  = idx_[idx_neighbors_][d_p_[idx_neighbors_] <= Gamma]
+        
+    if idx_temporal_.shape[0] < kappa:  
+        # Increase similarity threshold 
+        idx_spatial_ = idx_[w_ >= np.sort(w_)[::-1][kappa]][:kappa]
+
+    else: 
+        # Rank neighbors by haversine distance
+        idx_spatial_rank_ = np.argsort(d_h_[idx_temporal_])
+
+        # Select the kappa_max closest neibors
+        idx_spatial_ = idx_temporal_[idx_spatial_rank_][:kappa]
+
+        # What is the distance threshold?
+        sigma = d_h_[idx_spatial_].max()
+
+    return idx_neighbors_, idx_temporal_, idx_spatial_, sigma
+
+
+# Periodic distance to rank samples by day of the year
+def _periodic_dist(d, gamma, 
+                   alpha = 0.5,
+                   day_to_degree = 360/365, 
+                   degree_to_rad = np.pi/180):
+    
+    return np.sin(alpha*degree_to_rad*day_to_degree*(d - gamma))**2
+    
+# Equinoxes - Soltices seasonal distance
+def _seasonal_dist(d1, d2, gamma = None):
+
+    # --- seasonal membership ---
+    # Soltices day of the year: 172 (summer), and 355 (winter)
+    # Equinox day of the year: 80 (spring), and 266 (fall)
+    def __seasonal_membership(d2):
+
+        D_s = np.min([_periodic_dist(219, d2), _periodic_dist(35, d2)])
+        D_e = np.min([_periodic_dist(126, d2), _periodic_dist(310, d2)]) 
+        D_ = np.array([D_s, D_e])
+        m_ = np.zeros_like(D_)
+        m_[np.argmin(D_)] = 1
+    
+        return m_
+    
+    m_ = __seasonal_membership(d2)
+    if gamma is not None:
+        return m_[0]*_periodic_dist(d1, d2 + gamma, alpha = 0.5) + m_[1]* _periodic_dist(d1, d2 + gamma/2., alpha = 1)
+    else:
+        return m_[0]*_periodic_dist(d1, d2, alpha = 0.5) + m_[1]*_periodic_dist(d1, d2, alpha = 1)
+
+
+def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t_ts,
+                                  forget_rate_f = 1.,
+                                  forget_rate_e = .5,
+                                  length_scale_f = .1,
+                                  length_scale_e = .75,
+                                  lookup_rate = .05,
+                                  trust_rate = 0.0175,
+                                  nu = 340,
+                                  gamma = 30,
+                                  xi = 0.99,
+                                  kappa = 500,
+                                  idx_hours_ = False,     
+                                  p_fusion = 0.):
+
+    kappa = int(kappa)
     #print(1)
 
     # Get constants
@@ -259,22 +308,22 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     #print(4)
 
     # d: Temporal distance between samples 
-    d_p_  = _periodic_dist(t_tr_, t_ts)
-    Gamma = _periodic_dist(t_ts, t_ts + gamma)
-    idx_temporal_ = np.arange(d_p_.shape[0], dtype = int)[d_p_ <= Gamma]
-    d_p_          = d_p_[idx_temporal_]
+    # d_p_  = _periodic_dist(t_tr_, t_ts)
+    # Gamma = _periodic_dist(t_ts, t_ts + gamma)
+    d_p_ = _seasonal_dist(t_tr_, t_ts)
+    Gamma = _seasonal_dist(t_ts, t_ts, gamma)
     #print(5)
 
-    F_tr_p_ = F_tr_[idx_temporal_, :].copy()
-    E_tr_p_ = E_tr_[idx_temporal_, :].copy()
-
+    F_tr_p_ = F_tr_.copy()
+    E_tr_p_ = E_tr_.copy()
+    
     # d: Euclidean similarity distance between samples weighted by importance weights
     d_f_ = _euclidian_dist(F_tr_p_[:, :t], f_, w_ = phi_)
     d_e_ = _euclidian_dist(E_tr_p_, e_, w_ = psi_)
     #print(6)
 
     # d: Haverise spatial distance between samples
-    d_h_ = _haversine_dist(x_, x_tr_[idx_temporal_, :])
+    d_h_ = _haversine_dist(x_, x_tr_)
     #print(7)
 
     # w: normalized weights distance across observations based on the exponential link function
@@ -284,7 +333,12 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
     w_ = np.min(W_, axis = 0)
     #print(8)
 
-    idx_neigbors_, idx_spatial_, sigma = _scenario_filtering(w_, d_h_, xi, kappa_min, kappa_max)
+    idx_neighbors_, idx_temporal_, idx_spatial_, sigma = _scenario_filtering(w_, 
+                                                                             d_h_, 
+                                                                             d_p_, 
+                                                                             Gamma, 
+                                                                             xi, 
+                                                                             kappa)
     #print(9)
 
     # Fuse scenarios with day-ahead forecasts
@@ -303,12 +357,14 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
         p0 = np.sum(F_[j, :] == 0)/F_[j, :].shape[0]
         pf = p_fusion * (1. - trust_rate) / np.clip(1. - p0, eps, 1. - eps)
         u  = np.random.uniform(0., 1., size=1)[0]
+
         if u < pf:
             M_[j, :] = F_[j, :]
         else:
-            M_[j, :] = F_[j, :] * (1. - eta_) + E_[j, :] * eta_
+            M_[j, :] = F_[j, :] * (1. - eta_)  + E_[j, :] * eta_
 
-    w_p_         = w_[idx_spatial_]/w_[idx_spatial_].sum()
+    w_p_ = w_[idx_spatial_]/w_[idx_spatial_].sum()
+    w_pp_ = w_[idx_spatial_]
     focal_curve_ = M_.T @ w_p_
     
     _meta = {'phi': phi_,
@@ -322,12 +378,14 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
              'w_e': w_e_,
              'w': w_,
              'w_p': w_p_,
+             'w_pp': w_pp_,
+             'idx_neighbors': idx_neighbors_,
              'idx_temporal': idx_temporal_,
-             'idx_neigbors': idx_neigbors_,
              'idx_spatial': idx_spatial_,
              'xi': xi,
              't_ts': t_ts,
              'Gamma': Gamma,
+             'gamma': gamma,
              'sigma': sigma,
              'm_0': m_0_,
              'focal_curve': focal_curve_,
@@ -336,7 +394,9 @@ def _fknn_forecast_dynamic_update(F_tr_, E_tr_, x_tr_, t_tr_, dt_, f_, e_, x_, t
 
     return _meta, M_
 
-def _focal_curve_envelope(_depth, Y_, dt_, dist_, max_iter = 100):
+def _focal_curve_envelope(_depth, Y_, dt_, dist_, 
+                          max_iter = 100,
+                          idx_focal = 0):
     """
     Envelope algorithm to obtain functional neighbourhoods.
 
@@ -359,14 +419,14 @@ def _focal_curve_envelope(_depth, Y_, dt_, dist_, max_iter = 100):
         Dictionary with key 'Jordered' containing the ordered list
         of selected curve indices.
     """
-    
+    Y_ = Y_.T
     # Compute depth to find the focal-curve
     _fd_filtered = FDataGrid(data_matrix = Y_.T,
-                                   grid_points = dt_)
+                             grid_points = dt_)
     
-    filtered_depth_ = _depth(_fd_filtered)
-    idx_focal       = np.argsort(-filtered_depth_)[0]
-    f_              = Y_[:, idx_focal]
+    #filtered_depth_ = _depth(_fd_filtered)
+    # idx_focal       = np.argsort(-filtered_depth_)[0]
+    f_ = Y_[:, idx_focal]
 
     if isinstance(dist_, str):
         # Distances from curves to the focal-curve
@@ -449,11 +509,122 @@ def _focal_curve_envelope(_depth, Y_, dt_, dist_, max_iter = 100):
     idx_filtered_depth_         = np.argsort(-filtered_depth_)
     idx_ordered_filtered_depth_ = np.array(idx_sel_)[idx_filtered_depth_]
 
-    return Y_[:, idx_ordered_filtered_depth_]
+    return Y_[:, idx_ordered_filtered_depth_].T
 
+# def _focal_curve_envelope(_depth, Y_, dt_, dist_, 
+#                           idx_focal = 0,
+#                           max_iter  = 100):
+#     """
+#     Envelope algorithm to obtain functional neighbourhoods.
+
+#     Parameters
+#     ----------
+#     data : dict
+#         Dictionary with keys:
+#             - "x": np.ndarray of grid points (n_points,)
+#             - "y": np.ndarray of function values (n_points, n_curves)
+#     focal : int or str
+#         Index (or column name) of the focal curve to envelope.
+#     plot : bool, optional
+#         Whether to plot the selected curves in each iteration.
+#     max_iter : int, optional
+#         Maximum number of iterations before stopping.
+
+#     Returns
+#     -------
+#     dict
+#         Dictionary with key 'Jordered' containing the ordered list
+#         of selected curve indices.
+#     """
+    
+#     f_ = Y_[:, idx_focal]
+
+#     # Distances from curves to the focal-curve
+#     if dist_ == 'sup':
+#         dist_ = np.max(np.abs(Y_.T - f_), axis = 1)
+#     elif dist_ == 'l2':
+#         dist_ = np.sum((Y_.T - f_)**2, axis = 1)
+            
+#     # Initialize
+#     idx_subsample = []
+#     idx_          = [i for i in range(Y_.shape[1]) if i != idx_focal]
+#     iter_depth    = [0]
+#     iteration     = 0
+
+#     while len(idx_) > 1:
+        
+#         # New interation
+#         iteration += 1
+        
+#         # Sort curves by distance
+#         idx_sorted_dist_   = [idx_[i] for i in np.argsort(dist_[idx_])]
+#         idx_iter_subsample = [idx_sorted_dist_[0]]
+#         idx_candidates     = idx_sorted_dist_[1:]
+
+#         # Iterative envelope selection
+#         remaining_points = set(dt_)
+#         while remaining_points and idx_candidates:
+#             idx_next = idx_candidates[0]
+#             combined = idx_iter_subsample + [idx_next]
+            
+#             # Check if envelops
+#             sign_ = np.sign(Y_[:, combined].T - f_)
+#             Ji_   = np.where(np.abs(np.sum(sign_, axis = 0)) < len(combined))[0]
+            
+#             if len(remaining_points - set(dt_[Ji_]) ) == len(remaining_points):
+#                 # Does not envelope
+#                 idx_candidates.pop(0)
+#             else:
+#                 remaining_points -= set(dt_[Ji_])
+                
+#                 idx_iter_subsample.append(idx_next)
+                
+#                 idx_candidates = [c for c in idx_candidates if c not in idx_iter_subsample]
+#                 idx_           = [c for c in idx_ if c not in idx_iter_subsample]
+
+#         # Compute functional depth 
+#         _fd_subset = FDataGrid(data_matrix = (Y_[:, [idx_focal] 
+#                                                 + idx_subsample 
+#                                                 + idx_iter_subsample]).T,
+#                                grid_points = dt_)
+        
+#         depth_             = _depth(_fd_subset)
+#         idx_depth_         = np.argsort(-depth_)
+#         idx_ordered_depth_ = np.array([idx_focal] + idx_subsample + idx_iter_subsample)[idx_depth_]
+
+#         # How deep the new set of curves is?
+#         depth_percentile = 1 - np.where(idx_ordered_depth_ == idx_focal)[0][0]/(len(idx_ordered_depth_) - 1)
+        
+#         iter_depth.append(depth_percentile)
+
+#         # Accept subsample if depth improves
+#         if max(iter_depth[:-1]) <= iter_depth[-1]:
+#             idx_subsample.extend(idx_iter_subsample)
+            
+#         # Stop if there is not more candidate curves
+#         if not idx_candidates:
+#             break
+            
+#         # Stop if max_iter is reached
+#         if iteration >= max_iter:
+#             break
+
+#     # Selected curves
+#     idx_sel_ = [idx_focal] + idx_subsample
+    
+#     # Final selected curves ordered by depth
+#     _fd_filtered = FDataGrid(data_matrix = Y_[:, idx_sel_].T,
+#                              grid_points = dt_)
+        
+#     filtered_depth_             = _depth(_fd_filtered)
+#     idx_filtered_depth_         = np.argsort(-filtered_depth_)
+#     idx_ordered_filtered_depth_ = np.array(idx_sel_)[idx_filtered_depth_]
+
+#     return Y_[:, idx_ordered_filtered_depth_]
 
 # Downsample collection of curvers
-def _functional_downsampling(X_, x_, dt_, subsample, n_basis = 20):
+def _functional_downsampling(X_, dt_, x_, subsample, 
+                             n_basis = 20):
 
     n_samples, n_points = X_.shape
 
@@ -484,3 +655,15 @@ def _functional_downsampling(X_, x_, dt_, subsample, n_basis = 20):
 # Derive confidence intervals from a functional depth metric
 def _functional_confidence_band(J_, k):
     return J_[0, :], np.max(J_[1:k, :], axis = 0), np.min(J_[1:k, :], axis = 0)
+
+# Confidence bands from focal-curve envelop
+def _confidence_bands_from_depth(_depth, F_, alpha_, dt_, N):    
+
+    # Compute depth to find the focal-curve
+    _F = FDataGrid(data_matrix = F_,
+                   grid_points = dt_[-F_.shape[1]:])
+    
+    rank_ = np.argsort(_depth(_F))[::-1]
+
+    return F_[rank_[0], :], np.max(F_[rank_[:N], :], axis = 0), np.min(F_[rank_[:N], :], axis = 0)
+

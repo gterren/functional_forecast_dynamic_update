@@ -10,21 +10,12 @@ for A in forget_rate_e length_scale_e xi nu gamma kappa_min kappa_max; do
   sleep 5s
 done;
 
-# validate_ffc.py fusion 
-for A in 120 144 168; do
-  for B in forget_rate_f forget_rate_e lookup_rate length_scale_f length_scale_e trust_rate nu xi gamma kappa_min kappa_max p_fusion; do
+# validate_ffc.py fusion
+# for A in 72 144 216; do
+for A in 72 144 216; do
+  for B in forget_rate_f forget_rate_e lookup_rate length_scale_f length_scale_e trust_rate nu xi gamma kappa p_fusion; do
     sbatch run.job $A $B;
     sleep 5s
-  done;
-done;
-
-# envelop_ffc.py wind fusion 
-for C in 2 3; do
-  for B in 72 144; do
-    for A in fknn l2; do
-      sbatch run.job $A $B $C;
-      sleep 5s
-    done;
   done;
 done;
 
@@ -50,6 +41,11 @@ for A in 120 144 168; do
   sleep 5s
 done;
 
+for A in 72 144 216; do
+  sbatch run.job $A;
+  sleep 5s
+done;
+
 # test_ffc.py wind observation/dayhead/fusion
 for A in observation dayhead fusion; do
   for B in 72 144 216; do
@@ -66,7 +62,4 @@ for A in forget_rate_f forget_rate_e lookup_rate length_scale_f length_scale_e t
   sleep 5s
 done;
 
-for A in 0 2 4 6 8 10; do
-  sbatch run.job $A;
-  sleep 5s
-done;
+

@@ -6,12 +6,12 @@ import pickle as pkl
 
 from itertools import product
 from mpi4py import MPI
-
 from skfda.exploratory.depth import ModifiedBandDepth
 
 from ffc_utils import (_fknn_forecast_dynamic_update,
                        _functional_downsampling, 
                        _focal_curve_envelope, 
+                       _confidence_bands_from_depth,
                        _functional_confidence_band)
 
 from functional_utils import _confidence_bands_from_eCDF
@@ -67,7 +67,6 @@ def _get_node_info(verbose = False):
 
 # MPI job variables
 i_job, N_jobs, _comm = _get_node_info()
-#i_job = 0
 
 # Calibration experiments setup
 resource = sys.argv[1]
@@ -78,12 +77,11 @@ print(i_job, resource, method, time, dist)
 
 # Assets in the calibration experiments
 assets_ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-
 # Significance levels for the confidence intervals
 alpha_ = [0.1, 0.2, 0.3, 0.4]
 
 # Significance levels for the confidence intervals
-fractions_ = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+fractions_ = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.]
 
 T = 288
 
@@ -352,10 +350,11 @@ print(hyper_)
 
 FS_ = []
 asset = assets_[i_job]
+
 for day in range(363):
 
     file_name = f'{asset}-{day}-{time}'
-    print(file_name)
+    # print(i_job, file_name)
 
     try:
 
@@ -368,7 +367,7 @@ for day in range(363):
         f_hat_ = F_ts_[day, time:, asset]
 
         # Filter solar hours with loading solar set
-        idx_days_ = np.absolute(t_tr_ - day) < 7
+        idx_days_  = np.absolute(t_tr_ - day) < 7
         idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) + np.sum(E_tr_bias_[idx_days_, :], axis = 0)) > 1.
 
         _meta, M_ = _fknn_forecast_dynamic_update(F_tr_, E_tr_lin_, x_tr_, t_tr_, dt_, f_, e_lin_, x_, t,
@@ -381,45 +380,33 @@ for day in range(363):
                                                     nu = hyper_.loc['nu'][time],
                                                     gamma = hyper_.loc['gamma'][time],
                                                     xi = hyper_.loc['xi'][time],
-                                                    kappa = hyper_.loc['kappa'][time],
+                                                    kappa = hyper_.loc['kappa'][time], 
                                                     p_fusion = hyper_.loc['p_fusion'][time], 
                                                     idx_hours_ = idx_hours_)
 
-        # print(_meta['idx_neighbors'].shape, _meta['idx_temporal'].shape, _meta['idx_spatial'].shape, _meta['sigma'])
         m_0_ = np.ones(_meta['m_0'].shape)*f_[-1]
-        M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, dt_,
-                                                                x_ = m_0_,
-                                                                subsample = 12,
-                                                                n_basis = int(M_.shape[1]/5)) 
+        M_interp_, M_interp_ds_, dt_p_ = _functional_downsampling(M_, m_0_, dt_,
+                                                                    subsample = 12,
+                                                                    n_basis = int(M_.shape[1]/5)) 
 
-        if dist == 'fknn':
-            dist_ =  np.insert(_meta['w_p'], 0, 0)
-        else:
-            dist_ = dist
 
-        focal_curve_p_ = np.concatenate([_meta['m_0'][0], _meta['focal_curve']], axis = 0)
-        M_interp_ = np.concatenate([focal_curve_p_[np.newaxis], M_interp_], axis = 0)[:, 1:]
-
-        J_ = _focal_curve_envelope(ModifiedBandDepth(), 
-                                Y_ = M_interp_, 
-                                dt_ = dt_[-M_interp_.shape[1]:], 
-                                dist_ = dist_,
-                                max_iter = 100)
-
+        
         for fraction in fractions_:
 
-            N = int(fraction*J_.shape[0])
-            if N < 2:
-                N = 2
+            N = int(fraction*M_.shape[0])
 
-            m_, u_, l_ = _functional_confidence_band(J_, N)
+            if dist == 'MBD': 
+                _depth = ModifiedBandDepth()
+
+            m_, u_, l_ = _confidence_bands_from_depth(_depth, M_interp_, alpha_, dt_, N)
 
             for alpha in alpha_:
-                FCS = _empirical_coverage_score(f_hat_, l_, u_)
-                FIS = _empirical_interval_score(f_hat_, l_, u_, alpha).sum()
+
+                FCS = _empirical_coverage_score(f_hat_, l_[1:], u_[1:])
+                FIS = _empirical_interval_score(f_hat_, l_[1:], u_[1:], alpha).sum()
 
                 # Save results
-                FS_.append([time, asset, day, alpha, N, fraction, dist, M_.shape[0], J_.shape[0], FIS, FCS])
+                FS_.append([time, asset, day, alpha, N, fraction, dist, M_.shape[0], FIS, FCS])
 
     except Exception as e:
         print(f"Error for asset={asset}, day={day}, file={file_name}")
@@ -433,9 +420,8 @@ FS_ = pd.DataFrame(FS_, columns = ['time',
                                    'alpha',
                                    'k',
                                    'fraction',
-                                   'distance',
+                                   'depth',
                                    'n_scen',
-                                   'n_scen_evenlop',
                                    'FIS',
                                    'FCS'])
 
@@ -445,11 +431,9 @@ FS_['resource'] = resource
 FS_['method'] = method
 FS_['distance'] = dist
 
-FS_ = _gather_node_data(_comm, FS_)
+FCS_ = _gather_node_data(_comm, FS_)
 
 if i_job == 0:
-
-    _save_validation_csv(FS_, path_to_file = path_to_validation + f'/{resource}/{resource}-validation_envelop-all.csv')
 
     FS_ = FS_.groupby(['resource', 
                        'method', 
@@ -460,4 +444,4 @@ if i_job == 0:
                                          'FCS': 'mean'}).reset_index(drop = False)
     print(FS_)
 
-    _save_validation_csv(FS_, path_to_file = path_to_validation + f'/{resource}/{resource}-validation_envelop-0.csv')
+    _save_validation_csv(FS_, path_to_file = path_to_validation + f'/{resource}/{resource}-validation_depth-0.csv')
