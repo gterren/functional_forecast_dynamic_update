@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import pickle as pkl
 
-from statsmodels.distributions.empirical_distribution import ECDF
 from numba import njit, prange
 
 path_to_fPCA   = '/Users/Guille/Desktop/dynamic_update/software/fPCA'
@@ -231,21 +230,6 @@ def _fQuantile(X_, path):
 
     # Read output data
     return pd.read_csv(path + '/fDepth.csv', index_col = None)
-
-def _eQuantile(_eCDF, q_):
-    """
-    Calculates quantiles from an ECDF.
-
-    Args:
-    _eCDF: function from statsmodels api
-    q_: A list or numpy array of quantiles to calculate (values between 0 and 1).
-
-    Returns:
-    _Q: A dictionary where keys are the input quantiles and values are the corresponding
-    Quantile values from the ECDF.
-    """
-
-    return np.array([_eCDF.x[np.searchsorted(_eCDF.y, q)] for q in q_])
     
 # Derive confidence bands from a functional depth metric
 def _confidence_bands_from_fDepth(M_, alpha_, depth, path):
@@ -278,22 +262,6 @@ def _bootrapped_confidence_bands_from_fDepth(M_, alpha_, depth, path):
     for i in range(len(alpha_)):
         _y_pred_upper[f'{alpha_[i]}'] = inf_.loc[i].to_numpy()
         _y_pred_lower[f'{alpha_[i]}'] = sup_.loc[i].to_numpy()
-
-    return m_, _y_pred_upper, _y_pred_lower
-
-# Derive confidence bands from a functional depth metric
-def _confidence_bands_from_eCDF(M_, alpha_):    
-
-    _y_pred_upper = {}
-    _y_pred_lower = {}
-    for i in range(len(alpha_)):
-
-        _y_pred_lower[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [alpha_[i]/2.])
-                                                  for j in range(M_.shape[1])])[:, 0]
-        _y_pred_upper[f'{alpha_[i]}'] = np.stack([_eQuantile(ECDF(M_[:, j]), [1. - alpha_[i]/2.])
-                                                  for j in range(M_.shape[1])])[:, 0]
-
-    m_ = np.median(M_, axis = 0)
 
     return m_, _y_pred_upper, _y_pred_lower
 

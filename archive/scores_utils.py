@@ -342,7 +342,14 @@ def _errors(ac_, fc_):
     return pd.DataFrame(np.array([RMSE, MAE, MBE])[:, np.newaxis].T, columns = ['RMSE', 
                                                                                 'MAE', 
                                                                                 'MBE'])
- 
+
+
+    
+def _KS(pit_):
+    pit_ = np.asarray(pit_, dtype=float)
+    pit_ = pit_[np.isfinite(pit_)]
+    pit_ = np.clip(pit_, 0.0, 1.0)
+    return stats.kstest(pit_, 'uniform').statistic
     
 # def _evaludate_update(f_ts_, f_ts_hat_, S_ts_hat_, F_scen_):
     
