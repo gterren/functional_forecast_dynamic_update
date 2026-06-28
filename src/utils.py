@@ -2,12 +2,8 @@ import pandas as pd
 import numpy as np
 import scipy.stats as stats
 
+from sklearn.linear_model import LinearRegression
 from statsmodels.distributions.empirical_distribution import ECDF
-
-#from scipy.integrate import quad
-#from scipy import interpolate
-#from scipy.stats import multivariate_normal, norm
-#from scipy.interpolate import make_smoothing_spline
 
 # Interpolate model hyperparameters across intervals
 def _get_hyper(hyper_, param, time):
@@ -92,7 +88,7 @@ def _empirical_PIT(y_obs, Y_ens, seed=1234):
 
 
 # Calculate the interval score (IS) for probabilistic forecasts with an interval [lower, upper].
-def _empirical_interval_score(y_true_, lower_, upper_, alpha):
+def _interval_score(y_true_, lower_, upper_, alpha):
     """
     Parameters:
     - y_true: Observed (true) values
@@ -117,7 +113,7 @@ def _empirical_interval_score(y_true_, lower_, upper_, alpha):
     return penalty_lower + penalty_upper + penalty_width
 
 # Calculate the weighted interval score (WIS) for probabilistic forecasts in multiple intervals
-def _weighted_empirical_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_upper, alpha_):
+def _weighted_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_upper, alpha_):
     """
     Parameters:
     - y_true: Observed (true) values
@@ -133,10 +129,10 @@ def _weighted_empirical_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_up
     w_  = np.array(alpha_)/2.
     is_ = np.zeros((y_true.shape[0], w_.shape[0]))
     for i in range(len(alpha_)):
-        is_[:, i] = _empirical_interval_score(y_true, 
-                                              _y_pred_lower[f'{alpha_[i]}'], 
-                                              _y_pred_upper[f'{alpha_[i]}'],
-                                              alpha_[i])
+        is_[:, i] = _interval_score(y_true, 
+                                    _y_pred_lower[f'{alpha_[i]}'], 
+                                    _y_pred_upper[f'{alpha_[i]}'],
+                                    alpha_[i])
     
     term0 = 1./(len(alpha_) + 1/2.)
     term1 = w0 * np.absolute(y_true - y_pred)
@@ -149,7 +145,7 @@ def _weighted_empirical_interval_score(y_true, y_pred, _y_pred_lower, _y_pred_up
 
 
 # Compute empirical coverage of prediction intervals.
-def _empirical_coverage_score(y_true_, lower_, upper_):
+def _coverage_score(y_true_, lower_, upper_):
     """
     Parameters
     ----------
@@ -174,3 +170,45 @@ def _empirical_coverage_score(y_true_, lower_, upper_):
     
     inside = (y_true_ >= lower_) & (y_true_ <= upper_)
     return inside.mean()
+
+# Simultaneous coverage for a single trajectory.
+def _simultaneous_coverage(y_true_, lower_, upper_):
+    """
+    Parameters
+    ----------
+    y_true_ : array-like
+        Observed trajectory/function.
+
+    lower_ : array-like
+        Lower prediction band.
+
+    upper_ : array-like
+        Upper prediction band.
+
+    Returns
+    -------
+    int
+        1 if the entire trajectory is covered,
+        0 otherwise.
+    """
+
+    y_true_ = np.asarray(y_true_)
+    lower_ = np.asarray(lower_)
+    upper_ = np.asarray(upper_)
+
+    inside = (y_true_ >= lower_) & (y_true_ <= upper_)
+
+    return 1.*np.all(inside)
+
+# Bias-correction of day-ahead forecast
+def _bias_corrected_forecast(F_, E_):
+    _models = {}
+    E_unbias_ = np.full_like(E_, np.nan)
+    for t in range(F_.shape[1]):
+        for a in range(F_.shape[2]):
+            # Fit linear model with intercept
+            _model = LinearRegression(fit_intercept=True)
+            _model = _model.fit(E_[:, t, a].reshape(-1, 1), F_[:, t, a])
+            # Unbiased forecast
+            E_unbias_[:, t, a] = _model.predict(E_[:, t, a].reshape(-1, 1))
+    return E_unbias_

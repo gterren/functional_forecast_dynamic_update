@@ -257,7 +257,6 @@ def _confidence_bands_from_fDepth(M_, alpha_, depth, path):
     _y_pred_upper = {}
     _y_pred_lower = {}
     for i in range(len(alpha_)):
-        print(int(M_.shape[0] * alpha_[i]), M_.shape)
         scen_                         = M_[I_[:-int(M_.shape[0] * alpha_[i])],]
         _y_pred_upper[f'{alpha_[i]}'] = np.max(scen_, axis = 0)
         _y_pred_lower[f'{alpha_[i]}'] = np.min(scen_, axis = 0)

@@ -1,30 +1,28 @@
 #!/bin/bash -l
-#SBATCH --job-name=validate_asset_ffc_mpi
-#SBATCH --time=48:00:00
+
+#SBATCH --job-name=validate_asset_ffc_mpi-wind
+#SBATCH --time=24:00:00
 ##SBATCH --nodes=1
-#SBATCH --ntasks-per-node=24
-##SBATCH --exclusive
+#SBATCH --ntasks-per-node=12
 #SBATCH -p batch
+
+##SBATCH --exclusive
 ##SBATCH -p largemem
 ##SBATCH --mem=187G
 ##SBATCH --output=res.txt
 ##SBATCH --mail-type=BEGIN,END
 ##SBATCH --mail-user=guillermoterren@ucsb.edu
-#SBATCH --output=%x.%j.out
+
+#SBATCH --output=logs/%x.%j.out
+#SBATCH --error=logs/%x.%j.err
 
 cd /home/gterren/dynamic_update/functional_forecast_dynamic_update/scripts
 
 source activate fda
 
-#mpirun -np 12 python validate_asset_ffc.py wind fusion $1 $2
-#mpirun -np 12 python validate_agg_ffc.py wind fusion $1 $2
-#python validate_zone_ffc.py wind fusion 6
-#mpirun -np 12 python -u validate_zone_ffc_mpi.py wind fusion $1 $2
-mpirun -np 24 python -u validate_asset_ffc_mpi.py wind fusion $1 $2
+#mpirun -np 12 python -u validate_zone_ffc_mpi.py wind fusion $1 $2 0.25 0 biased_sel-025
+mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased_sel-025
+#mpirun -np 12 python -u validate_asset_ffc_mpi.py solar fusion $1 $2 0.25 1 unbiased_sel-025-2
 
-#mpirun -np 20 python validate_asset_depth.py wind fusion $1 MBD
-# mpirun -np 20 python validate_asset_envelop.py wind fusion $1 $2
-
-#mpirun -np 20 python test_ffc.py wind fusion $1
-#mpirun -np 20 python test_envelop.py wind fusion $1 $2
-#mpirun -np 20 python validate_envelop.py wind fusion 72 fknn
+#mpirun -np 4 python -u validate_asset_ffc_mpi.py wind fusion 144 1
+#mpirun -np 4 python -u validate_zone_ffc_mpi.py wind fusion 12 1

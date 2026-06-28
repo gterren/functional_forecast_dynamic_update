@@ -1,196 +1,109 @@
-import os, datetime, sys, time, pickle
+import os, optuna, sys, pickle
 
 sys.path.append('/home/gterren/dynamic_update/functional_forecast_dynamic_update/')
 
 import pandas as pd
 import numpy as np
-import pickle as pkl
 import multiprocessing as mp
 
 from mpi4py import MPI
 from functools import partial
 from skfda.exploratory.depth import ModifiedBandDepth
-from datetime import datetime, timedelta
+from scipy.stats import qmc
+from time import sleep
+
+from optuna.samplers import GPSampler, TPESampler
+from optuna.importance import (get_param_importances,
+                               FanovaImportanceEvaluator,
+                               MeanDecreaseImpurityImportanceEvaluator,
+                               PedAnovaImportanceEvaluator)
 
 from src.fdu import functional_dynamic_update
 
 from src.utils import (_KS, 
-                       _weighted_empirical_interval_score, 
-                       _empirical_coverage_score,
-                       _empirical_interval_score,
+                       _weighted_interval_score, 
+                       _simultaneous_coverage,
+                       _coverage_score,
+                       _interval_score,
                        _empirical_PIT, 
                        _energy_score)
 
-np.seterr(all='raise')
-
-path_to_data = '/home/gterren/dynamic_update/data'
 path_to_validation = '/home/gterren/dynamic_update/validation'
 path_to_param = '/home/gterren/dynamic_update/params'
+path_to_data = '/home/gterren/dynamic_update/data'
 
+# load or create DataFrame
+def _read_csv_safe(path):
+
+    if os.path.exists(path):
+
+        while os.path.getsize(path) == 0:
+            sleep(1)
+
+        return pd.read_csv(path)
+    else:
+        return pd.DataFrame()
+     
 # load dataset
-def _load_dataset(_dataset, region, N_test_sampels):
-    #print(region, N_test_sampels)
-    
-    zone = region
-    N = N_test_sampels
+def _load_dataset(_dataset, region, N_test_samples):
+    #print(region, N_test_samples)
 
-    dt_tr_ = _dataset[zone]['datetime_actuals'][:-N, ...]
-    dt_ts_ = _dataset[zone]['datetime_actuals'][-N:, ...]
+    dt_tr_ = _dataset[region]['datetime_actuals'][:-N_test_samples, ...]
+    dt_ts_ = _dataset[region]['datetime_actuals'][-N_test_samples:, ...]
     #print(dt_tr_.shape, dt_ts_.shape)
     
-    d_tr_ = _dataset[zone]['datetime_actuals'][:-N, 0, 24]
-    d_ts_ = _dataset[zone]['datetime_actuals'][-N:, 0, 24]
+    d_tr_ = _dataset[region]['datetime_actuals'][:-N_test_samples, 0, 0, 24]
+    d_ts_ = _dataset[region]['datetime_actuals'][-N_test_samples:, 0, 0, 24]
     d_tr_ = pd.to_datetime(d_tr_).dayofyear.to_numpy()
     d_ts_ = pd.to_datetime(d_ts_).dayofyear.to_numpy()
     #print(d_tr_.shape, d_ts_.shape)
 
-    datetime_tr_ = _dataset[zone]['datetime_actuals'][:-N, ...]
-    datetime_ts_ = _dataset[zone]['datetime_actuals'][-N:, ...]
+    datetime_tr_ = _dataset[region]['datetime_actuals'][:-N_test_samples, ...]
+    datetime_ts_ = _dataset[region]['datetime_actuals'][-N_test_samples:, ...]
     #print(datetime_tr_.shape, datetime_ts_.shape)
 
-    F_tr_ = _dataset[zone]['actuals'][:-N, ...] 
-    F_ts_ = _dataset[zone]['actuals'][-N:, ...]
-    #print(F_tr_.min(), F_tr_.max())
-    #print(F_ts_.min(), F_ts_.max())
+    F_tr_ = _dataset[region]['actuals'][:-N_test_samples, ...] 
+    F_ts_ = _dataset[region]['actuals'][-N_test_samples:, ...]
     #print(F_tr_.shape, F_ts_.shape)
 
-    E_tr_ = _dataset[zone]['forecasts'][:-N, ...] 
-    E_ts_ = _dataset[zone]['forecasts'][-N:, ...]
-    #print(E_tr_.min(), E_tr_.max())
-    #print(E_ts_.min(), E_ts_.max())
+    if unbiased:
+        E_tr_ = _dataset[region]['unbiased_forecasts'][:-N_test_samples, ...] 
+        E_ts_ = _dataset[region]['unbiased_forecasts'][-N_test_samples:, ...]
+    else:
+        E_tr_ = _dataset[region]['forecasts'][:-N_test_samples, ...] 
+        E_ts_ = _dataset[region]['forecasts'][-N_test_samples:, ...]
     #print(E_tr_.shape, E_ts_.shape)
 
-    x_tr_ = _dataset[zone]['neighbors'][:-N, ...]
-    x_ts_ = _dataset[zone]['neighbors'][-N:, ...]
-    #print(x_tr_.shape, x_ts_.shape)
+    X_tr_ = _dataset[region]['neighbors'][:-N_test_samples, ...]
+    X_ts_ = _dataset[region]['neighbors'][-N_test_samples:, ...]
+    #print(X_tr_.shape, X_ts_.shape)
+
+    # Formating 
+    idx_  = X_ts_[..., 1] == 0.
+    F_ts_ = F_ts_[idx_, ...]
+    E_ts_ = E_ts_[idx_, ...]
+    X_ts_ = X_ts_[idx_, ...]
+    datetime_ts_ = datetime_ts_[idx_, ...]
+    #print(F_ts_.shape, E_ts_.shape, d_ts_.shape, X_ts_.shape, datetime_ts_.shape)
+
+    F_tr_ = np.concatenate([F_tr_[:, i, ...] for i in range(F_tr_.shape[1])], axis = 0)
+    E_tr_ = np.concatenate([E_tr_[:, i, ...] for i in range(E_tr_.shape[1])], axis = 0)
+    d_tr_ = np.concatenate([d_tr_ for i in range(X_tr_.shape[1])], axis = 0)
+    X_tr_ = np.concatenate([X_tr_[:, i, ...] for i in range(X_tr_.shape[1])], axis = 0)
+    datetime_tr_ = np.concatenate([datetime_tr_[:, i, ...] for i in range(datetime_tr_.shape[1])], axis = 0)
+    #print(E_tr_.shape, E_tr_.shape, d_tr_.shape, X_tr_.shape, datetime_tr_.shape)
 
     dt_ = np.linspace(0, dt_tr_.shape[-1] - 1, dt_ts_.shape[-1])*12*5
     #print(dt_.shape)
 
-    return F_tr_, F_ts_, E_tr_, E_ts_, d_tr_, d_ts_, datetime_tr_, datetime_ts_, x_tr_, x_ts_, dt_
+    return F_tr_, F_ts_, E_tr_, E_ts_, d_tr_, d_ts_, datetime_tr_, datetime_ts_, X_tr_, X_ts_, dt_
 
-def _run_ffc(process_, _DATA, hyper_, time, 
-             parameter = None, 
-             value = None, 
-             N_test_days = 360):
-
-    region, day = process_
-    day = int(day)
-    hyper_p_ = hyper_.copy()
-
-    if (parameter is not None) and (value is not None):
-        hyper_p_.loc[parameter, time] = value
-
-    file_name = f'{region}-{day}-{time}'
-    #print(file_name)
-
-    # Get data for this region
-    (F_tr_, F_ts_, 
-    E_tr_, E_ts_, 
-    d_tr_, d_ts_, 
-    t_tr_, t_ts_, 
-    X_tr_, X_ts_, dt_) = _load_dataset(_DATA['Dataset'], region, N_test_days)
-
-    _fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 'spatial': 'graph'}, region)
-
-    # Get functional training set
-    F_tr_p_ = F_tr_[:, time, :]
-    E_tr_p_ = np.concatenate([np.zeros((E_tr_.shape[0], 24)), E_tr_[:, time, :]], axis = 1)
-
-    _fdu.fit(F_tr_p_, E_tr_p_, dt_, 
-             X_ = X_tr_, 
-             t_ = d_tr_)
-
-    # Get functional predictors for a given test
-
-    f_ = F_ts_[day, time, :24]
-    f_hat_ = F_ts_[day, time, 24:]
-    e_ = E_ts_[day, time, :]
-    e_p_ = np.concatenate([np.zeros(24,), e_, ], axis = 0)
-
-    try:    
-        # Forecasting update    
-        M_ = _fdu.predict(f_, e_p_, X_ts_[day], d_ts_[day],
-                          clique_order = hyper_p_.loc['clique_order'][time],
-                          forget_rate_f = hyper_p_.loc['forget_rate_f'][time],
-                          forget_rate_e = hyper_p_.loc['forget_rate_e'][time],
-                          length_scale_f = hyper_p_.loc['length_scale_f'][time],
-                          length_scale_e = hyper_p_.loc['length_scale_e'][time],
-                          lookup_rate = hyper_p_.loc['lookup_rate'][time],
-                          trust_rate = hyper_p_.loc['trust_rate'][time],
-                          nu = hyper_p_.loc['nu'][time],
-                          gamma = hyper_p_.loc['gamma'][time],
-                          xi = hyper_p_.loc['xi'][time],
-                          kappa = hyper_p_.loc['kappa'][time],
-                          p_fusion = hyper_p_.loc['p_fusion'][time])
-
-        #print(_fdu.idx_neighbors_.shape, _fdu.idx_temporal_.shape, _fdu.idx_spatial_.shape)
-        # Confidence bands from marginal empirical density function
-        f_median_, _upper, _lower = _fdu.ecdf_confidence_bands(M_, alpha_)
-
-        # Scoring rules
-        ES = _energy_score(M_, f_hat_)
-        WIS = _weighted_empirical_interval_score(f_hat_, f_median_, _lower, _upper, alpha_).sum()
-        PIT_ = _empirical_PIT(f_hat_, M_.T, seed = 1234)
-
-        # Error metrics
-        RMSE = np.sqrt(np.mean((_fdu.f_focal_ - e_)**2))
-        MBE  = np.mean(f_hat_ - _fdu.f_focal_)
-
-        STD_ = pd.DataFrame(np.std(M_, axis = 0)).T
-        STD_.columns = [f'H{str(i+1).zfill(2)}' for i in range(len(STD_.columns))]
-        STD_['time'] = time
-        STD_['region'] = region
-        STD_['day'] = day
-
-    except Exception as e:
-        print(rank, file_name, parameter, value, e)
-        return None, None, None
-
-    # Collect scoring rules
-    PSR_ = np.array([time, region, day, parameter, value, WIS, RMSE, MBE, ES])
-    # print(PSR_.shape, PIT_.shape, STD_.shape)
-
-    return PSR_, PIT_, STD_
-
-# Run FFC experiments in parallel with MPI
-def _run_ffc_parallel_mpi(_DATA, hyper_, processes_, parameter, value, time):
-
-    _func = partial(_run_ffc,
-                    _DATA=_DATA,
-                    hyper_=hyper_,
-                    time=time,
-                    parameter=parameter,
-                    value=value)
-
-    local_psr = []
-    local_pit = []
-    local_std = []
-
-    local_processes_ = np.array_split(processes_, size)[rank] 
-    for process_ in local_processes_:
-        psr_list, pit_list, std_list = _func(process_) 
-        
-        if (psr_list is not None) and (pit_list is not None):
-            local_psr.append(psr_list)
-            local_pit.append(pit_list)
-            local_std.append(std_list)
-
-    if (len(local_psr) / len(local_processes_)) > 0.5:
-        local_psr = np.stack(local_psr)
-        local_pit = np.stack(local_pit)
-        local_std = pd.concat(local_std, axis = 0)
-        # print(local_psr.shape, local_pit.shape, local_psr.shape)
-        return local_psr, local_pit, local_std
-    else:
-        return None, None, None
-
-def _run_ffc_envelop(process_, _DATA, hyper_, time, distances_, fractions_, alpha_, k_,
+# Run FFC experiments for a given process and set of parameters, and compute confidence bands and scoring rules.
+def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k_, time, 
                      N_test_days = 360):
 
     region, day = process_
     day = int(day)
-    hyper_p_ = hyper_.copy()
 
     file_name = f'{region}-{day}-{time}'
     #print(file_name)
@@ -200,64 +113,78 @@ def _run_ffc_envelop(process_, _DATA, hyper_, time, distances_, fractions_, alph
     E_tr_, E_ts_, 
     d_tr_, d_ts_, 
     t_tr_, t_ts_, 
-    X_tr_, X_ts_, dt_) = _load_dataset(_DATA['Dataset'], region, N_test_days)
+    X_tr_, X_ts_, dt_) = _load_dataset(_data['Dataset'], region, N_test_days)
 
-    _fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 'spatial': 'graph'}, region)
+    # Initialize functional dynamic update model
+    _fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 'spatial': 'graph', 'fusion': 'None'}, region)
 
     # Get functional training set
     F_tr_p_ = F_tr_[:, time, :]
     E_tr_p_ = np.concatenate([np.zeros((E_tr_.shape[0], 24)), E_tr_[:, time, :]], axis = 1)
 
+    # Fit functional dynamic update model on training data
     _fdu.fit(F_tr_p_, E_tr_p_, dt_, 
              X_ = X_tr_, 
-             t_ = d_tr_)
+             t_ = d_tr_,
+             n_samples_per_hour = 1)
 
     # Get functional predictors for a given test
     f_ = F_ts_[day, time, :24]
     f_hat_ = F_ts_[day, time, 24:]
     e_ = E_ts_[day, time, :]
-    e_p_ = np.concatenate([np.zeros(24,), e_, ], axis = 0)
+
+    f_ = np.asarray(f_, dtype=np.float64)
+    f_hat_ = np.asarray(f_hat_, dtype=np.float64)
+    e_ = np.asarray(e_, dtype=np.float64)
+
+    e_p_ = np.concatenate([np.zeros(24,), e_], axis = 0)
+
+    _hyperparams = {**_fixed_hyper[time], **_params,}
 
     try:    
         # Forecasting update    
-        M_ = _fdu.predict(f_, e_p_, X_ts_[day], d_ts_[day],
-                        clique_order = hyper_p_.loc['clique_order'][time],
-                        forget_rate_f = hyper_p_.loc['forget_rate_f'][time],
-                        forget_rate_e = hyper_p_.loc['forget_rate_e'][time],
-                        length_scale_f = hyper_p_.loc['length_scale_f'][time],
-                        length_scale_e = hyper_p_.loc['length_scale_e'][time],
-                        lookup_rate = hyper_p_.loc['lookup_rate'][time],
-                        trust_rate = hyper_p_.loc['trust_rate'][time],
-                        nu = hyper_p_.loc['nu'][time],
-                        gamma = hyper_p_.loc['gamma'][time],
-                        xi = hyper_p_.loc['xi'][time],
-                        kappa = hyper_p_.loc['kappa'][time],
-                        p_fusion = hyper_p_.loc['p_fusion'][time])
-
+        M_hat_ = _fdu.predict(f_, e_p_, X_ts_[day], d_ts_[day], **_hyperparams) 
+    
+        # Confidence bands from depth function
         _depth = ModifiedBandDepth()
 
         results_ = []
         for distance in distances_:
-            
-            if (distance == 'MBD'):
+
+            if (distance == 'ECDF'):
+
+                # Confidence bands from marginal empirical density function
+                f_median_ext_, _upper_ecdf, _lower_ecdf = _fdu.ecdf_confidence_bands(M_hat_, alpha_)
+
+                for alpha in alpha_:
+                    FIS_ecdf = _interval_score(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'], alpha).mean()
+                    FCS_ecdf = _coverage_score(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'])
+                    SCP_ecdf = _simultaneous_coverage(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'])
+
+                    # Save results
+                    results_.append([time, region, day, alpha, M_hat_.shape[0], 'ECDF', M_hat_.shape[0], M_hat_.shape[0], FIS_ecdf, FCS_ecdf, SCP_ecdf])
+
+            # depth-based envelope
+            elif (distance == 'MBD'):
 
                 for fraction in fractions_:
                     if fraction is not None: 
                         k_ = [fraction, fraction, fraction, fraction]
 
-                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(_depth, M_, alpha_, k_)
+                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(_depth, M_hat_, alpha_, k_)
 
                     for alpha in alpha_:
-                        FIS_depth = _empirical_interval_score(f_hat_, _lower_depth[f'{alpha}'], _upper_depth[f'{alpha}'], alpha).sum()
-                        FCS_depth = _empirical_coverage_score(f_hat_, _lower_depth[f'{alpha}'], _upper_depth[f'{alpha}'])
+                        FIS_depth = _interval_score(f_hat_, _lower_depth[f'{alpha}'], _upper_depth[f'{alpha}'], alpha).mean()
+                        FCS_depth = _coverage_score(f_hat_, _lower_depth[f'{alpha}'], _upper_depth[f'{alpha}'])
+                        SCP_depth = _simultaneous_coverage(f_hat_, _lower_depth[f'{alpha}'], _upper_depth[f'{alpha}'])
 
                         # Save results
-                        results_.append([time, region, day, alpha, fraction, distance, M_.shape[0], M_.shape[0], FIS_depth, FCS_depth])
+                        results_.append([time, region, day, alpha, fraction, distance, M_hat_.shape[0], M_hat_.shape[0], FIS_depth, FCS_depth, SCP_depth])
 
-        
-            if (distance == 'l2') or (distance == 'sup') or (distance == 'fknn'):
+            # Focal curve envelope
+            elif (distance == 'l2') or (distance == 'sup') or (distance == 'fknn'):
 
-                J_ = _fdu.focal_curve_envelope(_depth, _fdu.M_ext_, distance, max_iter = 100)
+                J_hat_ = _fdu.focal_curve_envelope(_depth, _fdu.M_ext_, distance, max_iter = 100)
 
                 for fraction in fractions_:
                     if fraction is not None: 
@@ -266,27 +193,30 @@ def _run_ffc_envelop(process_, _DATA, hyper_, time, distances_, fractions_, alph
                     f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelop_confidence_bands(alpha_, k_)
 
                     for alpha in alpha_:
-                        FIS_focal = _empirical_interval_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:], alpha).sum()
-                        FCS_focal = _empirical_coverage_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:])
+                        FIS_focal = _interval_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:], alpha).mean()
+                        FCS_focal = _coverage_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:])
+                        SCP_focal = _simultaneous_coverage(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:])
 
-                        results_.append([time, region, day, alpha, fraction, distance, M_.shape[0], J_.shape[0], FIS_focal, FCS_focal])
-        
+                        results_.append([time, region, day, alpha, fraction, distance, M_hat_.shape[0], J_hat_.shape[0], FIS_focal, FCS_focal, SCP_focal])
+
+            else:
+                raise ValueError(f"Unknown distance: {distance}")
         results_ = np.stack(results_)
 
     except Exception as e:
-        print(rank, file_name, e)
+        print(RANK, file_name, e)
         return None
 
     return results_
 
 # Run FFC experiments in parallel with MPI
-def _run_ffc_envelop_parallel_mpi(_DATA, hyper_, processes_, distances_, alpha_, time,
+def _run_ffc_envelop_parallel_mpi(_data, _params, processes_, distances_, alpha_, time,
                                   fractions_ = [None],
                                   k_ = None):
 
     _func = partial(_run_ffc_envelop,
-                    _DATA=_DATA,
-                    hyper_=hyper_,
+                    _data=_data,
+                    _params=_params,
                     distances_=distances_,
                     fractions_=fractions_, 
                     alpha_=alpha_, 
@@ -295,7 +225,7 @@ def _run_ffc_envelop_parallel_mpi(_DATA, hyper_, processes_, distances_, alpha_,
 
     local_results = []
 
-    local_processes_ = np.array_split(processes_, size)[rank] 
+    local_processes_ = np.array_split(processes_, SIZE)[RANK] 
     for process_ in local_processes_:
         results_list = _func(process_) 
         
@@ -309,448 +239,592 @@ def _run_ffc_envelop_parallel_mpi(_DATA, hyper_, processes_, distances_, alpha_,
         return local_results
     else:
         return None
-
-# Find optimal value
-def _truncated_quadratic_min(x_, y_):
     
-    # Fit quadratic
-    a, b, c = np.polyfit(x_, y_, deg=2)
-        
-    # Check vertex
-    if a != 0:
-        x_star = -b / (2 * a)
+# Run FFC experiments for a given process and set of parameters, and compute PIT values and scoring rules.
+def _run_ffc(process_, _data, _params, time, N_test_days = 360):
+
+    region, day = process_
+    day = int(day)
+
+    file_name = f'{region}-{day}-{time}'
+    #print(file_name)
+
+    # Get data for this region
+    (F_tr_, F_ts_, 
+    E_tr_, E_ts_, 
+    d_tr_, d_ts_, 
+    t_tr_, t_ts_, 
+    X_tr_, X_ts_, dt_) = _load_dataset(_data['Dataset'], region, N_test_days)
+
+    # Initialize functional dynamic update model
+    _fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 'spatial': 'graph', 'fusion': 'None'}, region)
+
+    # Get functional training set
+    F_tr_p_ = F_tr_[:, time, :]
+    E_tr_p_ = np.concatenate([np.zeros((E_tr_.shape[0], 24)), E_tr_[:, time, :]], axis = 1)
+
+    # Fit functional dynamic update model on training data
+    _fdu.fit(F_tr_p_, E_tr_p_, dt_, 
+             X_ = X_tr_, 
+             t_ = d_tr_,
+             n_samples_per_hour = 1)
+
+    # Get functional predictors for a given test
+    f_ = F_ts_[day, time, :24]
+    f_hat_ = F_ts_[day, time, 24:]
+    e_ = E_ts_[day, time, :]
+
+    f_ = np.asarray(f_, dtype=np.float64)
+    f_hat_ = np.asarray(f_hat_, dtype=np.float64)
+    e_ = np.asarray(e_, dtype=np.float64)
+
+    e_p_ = np.concatenate([np.zeros(24,), e_, ], axis = 0)
+
+    _hyperparams = {**_fixed_hyper[time], **_params,}
+
+    try:    
+        # Forecasting update    
+        M_hat_ = _fdu.predict(f_, e_p_, X_ts_[day, :], d_ts_[day], **_hyperparams)
+
+        # PIT values from marginal empirical density function
+        pit_ = _empirical_PIT(f_hat_, M_hat_.T, seed = 1234)
+
+        # Confidence bands from depth function
+        f_deepest_ = _fdu.depth_confidence_bands(ModifiedBandDepth(), M_hat_, ALPHAS, ALPHAS)[0]
+
+        # Confidence bands from marginal empirical density function
+        f_median_, _upper, _lower = _fdu.ecdf_confidence_bands(M_hat_, ALPHAS)
+
+        # Scoring rules
+        es = _energy_score(M_hat_, f_hat_)
+        wis = _weighted_interval_score(f_hat_, f_median_, _lower, _upper, ALPHAS).mean()
+        mse = np.mean((f_hat_ - _fdu.f_focal_)**2)
+        mae = np.mean(np.absolute(f_hat_ - _fdu.f_focal_))
+
+        # Collect scoring rules
+        psr_ = np.array([time, region, day, 1.*_fdu.sparse_neighborhood, 1.*_fdu.sparse_temporal, es, wis, mse, mae])
+
+        # Collect statistics
+        stat_ = pd.DataFrame(np.std(M_hat_, axis = 0)).T
+        stat_.columns = [f'H{str(i+1).zfill(2)}' for i in range(len(stat_.columns))]
+        stat_['time'] = time
+        stat_['region'] = region
+        stat_['day'] = day
+
+        # Collect functional forecasts and actuals
+        f_median_ = pd.DataFrame([f_median_], columns = [f'H{i:02d}' for i in range(len(f_median_))])
+        f_median_['type'] = 'median'
+        f_deepest_ = pd.DataFrame([f_deepest_], columns = [f'H{i:02d}' for i in range(len(f_deepest_))])
+        f_deepest_['type'] = 'deepest'
+        f_focal_ = pd.DataFrame([_fdu.f_focal_], columns = [f'H{i:02d}' for i in range(len(_fdu.f_focal_))])
+        f_focal_['type'] = 'focal'
+        f_ac_ = pd.DataFrame([f_hat_], columns = [f'H{i:02d}' for i in range(len(f_hat_))])
+        f_ac_['type'] = 'actual'
+        f_fc_ = pd.DataFrame([e_], columns = [f'H{i:02d}' for i in range(len(e_))])
+        f_fc_['type'] = 'forecast'
+
+        func_ = pd.concat([f_median_, f_deepest_, f_focal_, f_ac_, f_fc_], axis = 0)  
+        func_['time'] = time
+        func_['region'] = region
+        func_['day'] = day
+
+    except Exception as e:
+        print(RANK, file_name,  e)
+        return None, None, None, None
+    
+    return pit_, psr_, stat_, func_
+
+# Run FFC experiments in parallel with MPI
+def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
+
+    _func = partial(_run_ffc,
+                    _data=_data,
+                    _params=_params,
+                    time=time)
+
+    # Split processes among ranks
+    local_processes_ = np.array_split(processes_, SIZE)[RANK] 
+
+    # Each rank processes its assigned subset of processes and collects local results
+    local_pit_ = []
+    local_psr_ = []
+    local_stat_ = []
+    local_func_ = []
+
+    for process_ in local_processes_:
+        pit_, psr_, stat_, func_ = _func(process_) 
+        # Only keep results if not None (i.e., if the process succeeded)
+        if (pit_ is not None) and (psr_ is not None):
+            local_pit_.append(pit_)
+            local_psr_.append(psr_)
+            local_stat_.append(stat_)
+            local_func_.append(func_)
+
+    # Only keep results if more than 90% of local processes succeeded
+    # (to avoid skewed results from too few samples)
+    if (len(local_pit_) / len(local_processes_)) > 0.9:
+        local_pit_ = np.stack(local_pit_, axis = 0)
+        local_psr_ = np.stack(local_psr_, axis = 0)
+        local_stat_ = pd.concat(local_stat_, axis = 0)
+        local_func_ = pd.concat(local_func_, axis = 0)
+
     else:
-        x_star = None
+        local_pit_ = None
+        local_psr_ = None
+        local_stat_ = None
+        local_func_ = None
+        
+    # Gather all local results
+    pit_ = COMM.gather(local_pit_, root=0)
+    psr_ = COMM.gather(local_psr_, root=0)
+    stat_ = COMM.gather(local_stat_, root=0)
+    func_ = COMM.gather(local_func_, root=0)
 
-    # Use quadratic minimum if valid
-    if (a > 0) and (x_star is not None) and (x_.min() <= x_star <= x_.max()):
-        return x_star, (a * x_star**2) + (b * x_star) + c
-    
-    # Otherwise fallback to numerical minimum
-    return x_[y_.argmin()], y_.min()
+    # Master computes KS
+    if RANK == 0:
+        # Make sure to filter out any None results from failed processes
+        pit_ = [x for x in pit_ if x is not None]
+        # If not all processes returned results, skip this parameter combination
+        if len(pit_) != SIZE:
+            ks = 1e10
+        
+        else:
+            # Concatenate results from all processes
+            pit_ = np.concatenate(pit_, axis=0)
+            psr_ = np.concatenate(psr_, axis=0)
+            stat_ = pd.concat(stat_, axis=0)
+            func_ = pd.concat(func_, axis=0)
 
-# Zones in the calibration experiments
-zones_ = [0, 1, 2, 3, 4]
-# Significance levels for the confidence intervals
-alpha_ = [0.1, 0.2, 0.3, 0.4]
+            try:
+                # Calculate aggregated PIT
+                ks    = np.array([_KS(pit_[:, j:(j + LEAD)].flatten()) for j in INTERVALS]).mean()
+                rmse  = np.sqrt(np.mean(psr_[:, -2].astype(float)))
+                mae   = np.mean(psr_[:, -1].astype(float))
+                score = ks + lambda_0*rmse
+
+                # Penalize score if produces numberical errors
+                if np.isnan(score):
+                    score = 1e10
+                    
+                # # Penalize score if produces sparsity
+                # if np.mean(psr_[:, 4].astype(float)) > 0.25:
+                #     ks = 1e10
+
+            # Penalize score if produces floating point error
+            except FloatingPointError as e:
+                print("     Skipping parameter due to KS failure")
+                return 1e10
+        
+    else: 
+        score = None
+        pit_ = None
+        psr_ = None
+        stat_ = None
+        func_ = None
+
+    # Broadcast KS and PIT values
+    score = COMM.bcast(score, root=0)
+    pit_ = COMM.bcast(pit_, root=0)
+    psr_ = COMM.bcast(psr_, root=0)
+    stat_ = COMM.bcast(stat_, root=0)
+    func_ = COMM.bcast(func_, root=0)
+
+    return score, pit_, psr_, stat_, func_
+
+# Objective function used by Optuna for Bayesian hyperparameter optimization.
+def _objective(trial, _data, _hyper, processes_val_, time, lambda_0):
+
+    if RANK == 0:
+        # Dictionary storing sampled hyperparameters
+        _params = {}
+
+        # Iterate over all hyperparameters
+        for name in _hyper.keys():
+
+            # Unpack lower bound, upper bound, and scaling type
+            l, u, scale = _hyper[name]
+
+            if type(u) == int:
+                # Integer hyperparameters
+                _params[name] = trial.suggest_int(name, l, u, log=(scale == 'log'))
+            else:
+                # Continuous hyperparameters
+                _params[name] = trial.suggest_float(name, l, u, log=(scale == 'log'))
+
+    else:
+        _params = None
+
+    # Broadcast parameter and values
+    _params = COMM.bcast(_params, root=0)
+
+    # Synchronize all processes before running FFC experiments
+    COMM.Barrier()
+
+    # Run function evaluation in parallel with MPI and return the KS score
+    return _run_ffc_parallel_mpi(_data, _params, processes_val_, time, lambda_0)[0]
+
+# Generate and enqueue Latin Hypercube Sampling (LHS) trials for Optuna Bayesian optimization.
+def _latin_hypercube_initialization(_bo, _params, n_samples):
+
+    # Latin Hypercube sampler
+    _lhs = qmc.LatinHypercube(d=len(_params))
+
+    # Generate samples in [0,1]
+    for sample in _lhs.random(n=n_samples):
+
+        # Dictionary storing sampled hyperparameters
+        x_ = {}
+
+        # Iterate through hyperparameters
+        for i, name in enumerate(list(_params.keys())):
+            low, high, scale = _params[name]
+
+            if scale == 'log':
+                # Logarithmic scaling
+                x_[name] = low * (high / low) ** sample[i]
+            elif scale == 'linear':
+                # Linear scaling
+                x_[name] = low + (high - low) * sample[i]
+            else:
+                # Unknown scaling type
+                raise ValueError(f"Unknown scale type: {scale}")
+            
+            if type(high) == int:
+                # Interger parameter
+                x_[name] = int(round(x_[name]))
+            else:
+                # Floating-point parameter
+                x_[name] = float(x_[name])
+
+        # Queue trial into Optuna study
+        _bo.enqueue_trial(x_)
+
+    return _bo
+
 # Number of interation
-N_iter = 48
-
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
-print(f'[Process {rank}-{size}]')
+N_bo_iter = 250
+N_lhs_init = 125
 
 # Calibration experiments setup
 resource = sys.argv[1]
 method = sys.argv[2] 
 time = int(sys.argv[3])
 init = int(sys.argv[4])
-description = 'C0'
+lambda_0 = float(sys.argv[5])
+unbiased = bool(int(sys.argv[6]))
+description = sys.argv[7]
+print(resource, method, time, lambda_0, init, unbiased, description)
 
-comm.Barrier()
+# Significance levels for the confidence intervals
+ALPHAS = [0.1, 0.2, 0.3, 0.4]
 
-# Hyperparameter combinations
-_params = {
-    'clique_order': [0, 1, 2],
-    'forget_rate_f': [0.0625, 0.125, 0.25, 0.5, 1., 2.],
-    'forget_rate_e': [0.25, 0.5, 1., 2., 4., 8., 16.],
-    'length_scale_f':[0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25],
-    'length_scale_e': [0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1.],
-    'lookup_rate': [0.5, 1., 2., 4., 6., 8., 10., 12., 24.],
-    'trust_rate': [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6],
-    'nu': [2., 3., 4., 5., 6., 7., 8., 9., 10.],
-    'gamma': [30, 35, 40, 45, 50, 55, 60],
-    'xi':[0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8],
-    'kappa': [100, 110, 120, 130, 140, 150, 160, 170, 180, 190],
-    'p_fusion': [0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65,  0.7, 0.75, 0.8, 0.85, 0.9],
+# KS evaluation intervals and lead time for the FFC experiments
+LEAD = 6
+INTERVALS = [0, 6, 12, 18, 24, 30]
+
+# MPI setup
+COMM = MPI.COMM_WORLD
+RANK = COMM.Get_rank()
+SIZE = COMM.Get_size()
+print(f'[Process {RANK}-{SIZE}]')
+
+# Fixed parameters depending on interval
+# _fixed_hyper = {
+#     6:  {'forget_rate_e': 1., 'p_fusion': 1.},
+#     12: {'forget_rate_e': 1., 'p_fusion': 1.},
+#     18: {'forget_rate_e': 1., 'p_fusion': 1.},
+# }
+
+_fixed_hyper = {
+    6:  {'forget_rate_e': 1., 'length_scale_f': 0.0025, 'length_scale_e': 0.1, 'p_fusion': 1.},
+    12: {'forget_rate_e': 1., 'length_scale_f': 0.0025, 'length_scale_e': 0.1, 'p_fusion': 1.},
+    18: {'forget_rate_e': 1., 'length_scale_f': 0.0025, 'length_scale_e': 0.1, 'p_fusion': 1.},
 }
 
-# Hyperparameters to validate
-if method == 'fusion':
-    parameters_val_ = [
-        'forget_rate_f', 
-        'lookup_rate', 
-        'length_scale_f', 
-        'length_scale_e', 
-        'trust_rate',
-        'nu', 
-        'gamma',
-        'kappa', 
-        'xi',  
-        'p_fusion'
-    ]
+# Hyperparameter combinations
+_hyper = {
+    'clique_order': [0, 2, 'linear'],
+    'forget_rate_f': [0.0625, 6., 'log'],
+    #'length_scale_f':[0.0025, 1., 'log'],
+    #'length_scale_e': [0.0025, 1., 'log'],
+    'lookup_rate': [0.0625, 96., 'log'],
+    'trust_rate': [0.05, .95, 'linear'],
+    'nu': [2., 24., 'linear'],
+    'xi': [0.05, 0.95, 'linear'],
+    'gamma': [7, 90, 'linear'],
+    'kappa': [50, 200, 'linear'],
+}
 
-if rank == 0: 
+if RANK == 0: 
     print(f'[Resource {resource}][Method {method}][Horizon {time}h][Initialization {init}]')
     print('----- HYPERPARAMETERS VALIDATION -----')
 
 # Load dataset
-with open(path_to_data + "/processed_ERCOT_wind_data.pkl", "rb") as f:
-    _DATA = pickle.load(f)
+with open(path_to_data + "/processed_ERCOT_wind_data_v4.pkl", "rb") as f:
+    _data = pickle.load(f)
 
-## LOAD HYPERPARAMETERS
-hyper_ = pd.read_csv(path_to_param + f'/{resource}/{resource}-{method}-hyper-zone.csv')
-hyper_ = hyper_.set_index("parameter")
-hyper_.columns = hyper_.columns.astype(int)
+dates_ = np.random.default_rng(1234).permutation(np.arange(360))
+processes_val_ = [(region, j) for region in _data['Graph'].keys() for j in dates_[:180]]
+processes_test_ = [(region, j) for region in _data['Graph'].keys() for j in dates_[180:]]
 
-hyper_.loc['clique_order', time] = 0
+if RANK != 0:
+    
+    # Disable Optuna logging for non-master ranks to avoid cluttering output
+    optuna.logging.disable_default_handler()
 
-processes_all_ = [(region, j) for region in list(_DATA['Graph'].keys()) for j in range(360)]
-processes_all_shuffled_ = list(np.random.default_rng(1234).permutation(processes_all_))
-processes_val_ = processes_all_shuffled_[:900]
-processes_test_ = processes_all_shuffled_[900:]
+# Master execution starts here
+if RANK == 0:
 
-all_PSR_ = []
-all_KS_ = []
-minima_ = []
-for iter in range(N_iter):
+    # Bayesian optimization with Gaussian Process surrogate model
+    _bo = optuna.create_study(direction="minimize",
+                              #study_name=f"{time}_{init}-{description}",
+                              #storage=db_path,
+                              #sampler=TPESampler(seed=1234, multivariate=True, group=True, n_startup_trials=0),)
+                              sampler=GPSampler(seed=1234, n_startup_trials=0))
 
-    KS_ = []
-    df_KS_ = []
-    df_PSR_ = []
-    values_ = []
+    # Latin Hypercube initialization
+    _bo = _latin_hypercube_initialization(_bo, _hyper, n_samples=N_lhs_init)
 
-    # Broadcast inputs (only needed if not already shared)
-    if rank == 0:
-        print(hyper_[time])
-        parameter = np.random.choice(parameters_val_)
-        hyper_shared = hyper_.copy()
-    else:
-        hyper_shared = None
-        parameter = None
-
-    # Broadcast parameter and values
-    parameter = comm.bcast(parameter, root=0)
-    hyper_shared = comm.bcast(hyper_shared, root=0)
-
-    for i, value in enumerate(_params[parameter]):
-
-        if rank == 0:
-            print(f'[Iteration {iter + 1}-{N_iter}][Parameter {i + 1}-{len(_params[parameter])}][{parameter}={value}]')
-
-        # Run FFC experiments in parallel
-        local_psr, local_pit, local_std = _run_ffc_parallel_mpi(_DATA, hyper_shared, 
-                                                     processes_ = processes_val_, 
-                                                     parameter = parameter,
-                                                     value = value,
-                                                     time = time)
-
-        # if any rank failed → skip this value everywhere
-        local_failed = (local_psr is None) or (local_pit is None) or (local_std is None)
-
-        any_failed = comm.allreduce(local_failed, op=MPI.LOR)
-
-        if any_failed:
-            if rank == 0:
-                print(f"Skipping {parameter}={value}")
-            continue
-
-        # Gather all local results
-        all_psr = comm.gather(local_psr, root=0)
-        all_pit = comm.gather(local_pit, root=0)
-
-        if rank == 0:
-            try:
-                # Only root processes all gathered result
-                PSR_ = np.concatenate(all_psr, axis=0)
-                PIT_ = np.concatenate(all_pit, axis=0)
-
-                # Calculate aggregated PIT
-                ks_ = [_KS(PIT_[:, j:(j + 1)].flatten()) for j in [1, 2, 4, 8, 16, 32]]
-                KS_.append(np.array(ks_).mean())
-                #KS_.append(np.array(ks_).max())
-                values_.append(value)
-
-                val_metrics = {'ES': np.median(PSR_[:, -1].astype(float)),
-                               'WIS': np.median(PSR_[:, -4].astype(float)),
-                               'RMSE': np.median(PSR_[:, -3].astype(float)),
-                               'MBE': np.median(PSR_[:, -2].astype(float)),
-                               'KS1': ks_[0],
-                               'KS2': ks_[1],
-                               'KS3': ks_[2],
-                               'KS4': ks_[3],
-                               'KS5': ks_[4],
-                               'KS6': ks_[5]}
-                
-                # Collect proper scoring rules
-                df_PSR_.append(PSR_)
-
-                # Collect KS scores
-                df_KS_.append([time, parameter, value] + ks_)
-
-            except FloatingPointError as e:
-                print(f"    [Rank {rank}] KS ERROR at value={value}: {e}")
-                print("     Skipping parameter due to KS failure")
-                continue
-
-    if rank == 0:
-
-        if len(KS_) == 0:
-            print(f"No successful runs for parameter {parameter}")
-
-        else:        
-            # Find optimal parameter
-            y_ = np.array(KS_)
-            x_ = np.array(values_)
-            print(y_.shape, x_.shape)
-
-            hyper_.loc[parameter, time] = _truncated_quadratic_min(x_, y_)[0]
-            #hyper_.loc[parameter, time] = x_[y_.argmin()]
-            minima_.append(y_.min())
-            print(y_.min(), x_[y_.argmin()])
-
-            # Proprer scores and metrics to dataframe
-            df_PSR_ = pd.DataFrame(np.concatenate(df_PSR_, axis = 0), columns = ['time', 
-                                                                                'region', 
-                                                                                'day', 
-                                                                                'parameter',
-                                                                                'value',
-                                                                                'WIS', 
-                                                                                'RMSE', 
-                                                                                'MBE', 
-                                                                                'ES'])
-
-            # KS scores to dataframe
-            df_KS_ = pd.DataFrame(df_KS_, columns = ['time', 
-                                                     'parameter',
-                                                     'value',
-                                                     'KS1',
-                                                     'KS2',
-                                                     'KS3',
-                                                     'KS4',
-                                                     'KS5',
-                                                     'KS6'])
-            
-            df_PSR_['iteration'] = iter
-            df_KS_['iteration'] = iter
-
-            all_PSR_.append(df_PSR_)
-            all_KS_.append(df_KS_)
-
-    comm.Barrier()
-
-if rank == 0:
-    if (len(all_PSR_) > 0) and (len(all_KS_) > 0):
-        minima_ = np.array(minima_)
-        print(minima_)
-
-        # Collect results
-        all_PSR_ = pd.concat(all_PSR_, axis = 0)
-        all_KS_ = pd.concat(all_KS_, axis = 0)
-
-        # Make sure results are robust
-        print(all_PSR_['WIS'].isna().sum())
-        print(all_PSR_['ES'].isna().sum())
-        print(all_PSR_['RMSE'].isna().sum())
-        print(all_PSR_['MBE'].isna().sum())
-        all_PSR_['WIS'] = pd.to_numeric(all_PSR_['WIS'], errors='coerce')
-        all_PSR_['ES'] = pd.to_numeric(all_PSR_['ES'], errors='coerce')
-        all_PSR_['RMSE'] = pd.to_numeric(all_PSR_['RMSE'], errors='coerce')
-        all_PSR_['MBE'] = pd.to_numeric(all_PSR_['MBE'], errors='coerce')
-        all_PSR_['time'] = pd.to_numeric(all_PSR_['time'], errors='coerce')
-        all_PSR_['value'] = pd.to_numeric(all_PSR_['value'], errors='coerce')
-        all_KS_['time'] = pd.to_numeric(all_KS_['time'], errors='coerce')
-        all_KS_['value'] = pd.to_numeric(all_KS_['value'], errors='coerce')
-
-        # Aggregate score across samples
-        agg_PSR_ = all_PSR_.groupby(['time',
-                                     'iteration',
-                                     'parameter', 
-                                     'value']).agg({'WIS': 'median',
-                                                    'ES': 'median',
-                                                    'RMSE': 'median',
-                                                    'MBE': 'median'}).reset_index(drop = False)
-
-        # Caculate average KS score across intervals
-        #all_KS_['KS'] = (all_KS_['KS1'] + all_KS_['KS2'] + all_KS_['KS3'] + all_KS_['KS4'] + all_KS_['KS5'])/5.
-
-        # Merge dataframes to have a single scoring rules dataframe
-        scores_ = agg_PSR_.merge(all_KS_,
-                                 on=['iteration', "parameter", "value", "time"],
-                                 how="left")
-
-        scores_['resource'] = resource
-        scores_['method'] = method
-
-        # Overwrite the CSV with the updated data
-        # scores_.to_csv(path_to_validation + f'/{resource}/{resource}_{method}_zone-hyper-validation_{time}-{description}.csv', index = False)
-
-# Broadcast inputs (only needed if not already shared)
-if rank == 0:
-    parameters_final = hyper_[time].to_dict()
-    print('----- HYPERPARAMETERS TEST -----')
-    print(hyper_)
-    hyper_shared = hyper_
 else:
-    hyper_shared = None
+    _bo = None
 
-# Broadcast parameter and values
-hyper_shared = comm.bcast(hyper_shared, root=0)
+# Broadcast the Optuna study object to all ranks
+_bo = COMM.bcast(_bo, root=0)
+
+# Define the objective function with fixed arguments using functools.partial
+_func = partial(_objective,
+                _data=_data,
+                _hyper=_hyper,
+                processes_val_=processes_val_,
+                time=time,
+                lambda_0=lambda_0)
+
+# Optimize hyperparameters
+_bo.optimize(_func, n_trials=N_bo_iter, n_jobs=1)
+
+if RANK == 0:
+
+    # fANOVA
+    importance_fanova = get_param_importances(_bo, evaluator=FanovaImportanceEvaluator())
+    # Random forest impurity
+    importance_mdi = get_param_importances(_bo, evaluator=MeanDecreaseImpurityImportanceEvaluator())
+    # PED-ANOVA
+    importance_pedanova = get_param_importances(_bo, evaluator=PedAnovaImportanceEvaluator())
+
+    dfs = []
+    for importance, results in {'fANOVA': importance_fanova,
+                                'MDI': importance_mdi,
+                                'PED-ANOVA': importance_pedanova}.items():
+
+        df_ = pd.DataFrame({'method': importance, 
+                            'parameter': list(results.keys()), 
+                            'value': list(results.values())})
+
+        dfs.append(df_)
+
+    importance_ = pd.concat(dfs, ignore_index=True)
+
+    importance_['initialization'] = init
+    importance_['time'] = time
+
+    # define results file path
+    importance_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-importance-{description}.csv'
+
+    # load or create DataFrame
+    importance_df = _read_csv_safe(importance_path)
+
+    # save results
+    importance_df = pd.concat([importance_df, importance_], ignore_index=True)
+    print(importance_df)
+
+    importance_df.to_csv(importance_path, index=False)
+    print(f"Saved importance to {importance_path}")
+
+    print('----- HYPERPARAMETERS TEST -----')
+    # Retrieve best hyperparameters
+    best_score = _bo.best_value
+    _best_params = _bo.best_params
+    print(best_score)
+    print(_best_params)
+else:
+    best_score = None
+    _best_params = None
+
+# Broadcast best hyperparameters to all ranks
+_best_params = COMM.bcast(_best_params, root=0)
 
 # Run FFC experiments in parallel
-local_psr, local_pit, local_std = _run_ffc_parallel_mpi(_DATA, hyper_shared, 
-                                             processes_ = processes_test_, 
-                                             parameter = parameter,
-                                             value = value,
-                                             time = time)
+ks, pit_, psr_, stat_, func_ = _run_ffc_parallel_mpi(_data, _best_params, processes_test_, time, lambda_0)
 
 # Gather all local results
-all_psr = comm.gather(local_psr, root=0)
-all_pit = comm.gather(local_pit, root=0)
-all_std = comm.gather(local_std, root=0)
+pit_ = COMM.gather(pit_, root=0)
+psr_ = COMM.gather(psr_, root=0)
+stat_ = COMM.gather(stat_, root=0)
+func_ = COMM.gather(func_, root=0)
 
-if rank == 0:
+if RANK == 0:
+
     # Only root processes all gathered result
-    PSR_ = np.concatenate(all_psr, axis=0)
-    PIT_ = np.concatenate(all_pit, axis=0)
-    STD_ = pd.concat(all_std, axis=0)
-    print(PSR_.shape, PIT_.shape, STD_.shape)
+    pit_ = np.concatenate(pit_, axis=0)
+    psr_ = np.concatenate(psr_, axis=0)
+    stat_ = pd.concat(stat_, axis=0)
+    func_ = pd.concat(func_, axis=0)
+    #print(pit_.shape, psr_.shape, stat_.shape, func_.shape)
+
     # Calculate aggregated PIT
-    ks_ = np.array([_KS(PIT_[:, j:(j + 1)].flatten()) for j in [1, 2, 4, 8, 16, 32]])
+    ks_ = np.array([_KS(pit_[:, j:(j + LEAD)].flatten()) for j in INTERVALS])
+    ks_labels_ = [f'S{i}' for i, j in enumerate(INTERVALS)]
 
     # Proper scores and metrics 
-    test_metrics = {
-        'ES': np.median(PSR_[:, -1].astype(float)),
-        'WIS': np.median(PSR_[:, -4].astype(float)),
-        'RMSE': np.median(PSR_[:, -3].astype(float)),
-        'MBE': np.median(PSR_[:, -2].astype(float)),
-        'KS1': ks_[0],
-        'KS2': ks_[1],
-        'KS3': ks_[2],
-        'KS4': ks_[3],
-        'KS5': ks_[4],
-        'KS6': ks_[5],
-    }
+    test_metrics = {'n_neighbors': np.mean(psr_[:, -6].astype(float)),
+                    'n_temporal': np.mean(psr_[:, -5].astype(float)),
+                    'ES': np.mean(psr_[:, -4].astype(float)),
+                    'WIS': np.mean(psr_[:, -3].astype(float)),
+                    'RMSE': np.sqrt(np.mean(psr_[:, -2].astype(float))),
+                    'MAE': np.mean(psr_[:, -1].astype(float)),
+                    'KS': np.mean(ks_.astype(float)),
+                    ks_labels_[0]: ks_[0],
+                    ks_labels_[1]: ks_[1],
+                    ks_labels_[2]: ks_[2],
+                    ks_labels_[3]: ks_[3],
+                    ks_labels_[4]: ks_[4],
+                    ks_labels_[5]: ks_[5]}
 
     # validation metrics already computed earlier → make sure you keep them
     # (you already defined val_metrics inside loop; keep last one or compute properly)
-    row = {
-        'initialization': init,
-        'time': time,
+    row_ = {'initialization': init,
+            'time': time,
 
-        # validation
-        'ES_val': val_metrics['ES'],
-        'WIS_val': val_metrics['WIS'],
-        'RMSE_val': val_metrics['RMSE'],
-        'MBE_val': val_metrics['MBE'],
-        'KS1_val': val_metrics['KS1'],
-        'KS2_val': val_metrics['KS2'],
-        'KS3_val': val_metrics['KS3'],
-        'KS4_val': val_metrics['KS4'],
-        'KS5_val': val_metrics['KS5'],
-        'KS6_val': val_metrics['KS6'],
+            # validation KS distance
+            'KS_val': best_score,
 
-        # test
-        'ES_test': test_metrics['ES'],
-        'WIS_test': test_metrics['WIS'],
-        'RMSE_test': test_metrics['RMSE'],
-        'MBE_test': test_metrics['MBE'],
-        'KS1_test': test_metrics['KS1'],
-        'KS2_test': test_metrics['KS2'],
-        'KS3_test': test_metrics['KS3'],
-        'KS4_test': test_metrics['KS4'],
-        'KS5_test': test_metrics['KS5'],
-        'KS6_test': test_metrics['KS6'],
+            # Neighbors and temporal used in the FFC update (these are averaged over all test samples)
+            'n_neighbors_test': float(test_metrics['n_neighbors']),
+            'n_temporal_test': float(test_metrics['n_temporal']),
 
-        # parameters
-        **parameters_final
-    }
+            # test proper scores
+            'ES_test': float(test_metrics['ES']),
+            'WIS_test': float(test_metrics['WIS']),
 
+            # Averege test KS distances
+            'RMSE_test': float(test_metrics['RMSE']),
+            'MAE_test': float(test_metrics['MAE']),
+            'KS_test': float(test_metrics['KS']),
+
+            # Test KS distances
+            ks_labels_[0] + '_test': float(test_metrics[ks_labels_[0]]),
+            ks_labels_[1] + '_test': float(test_metrics[ks_labels_[1]]),
+            ks_labels_[2] + '_test': float(test_metrics[ks_labels_[2]]),
+            ks_labels_[3] + '_test': float(test_metrics[ks_labels_[3]]),
+            ks_labels_[4] + '_test': float(test_metrics[ks_labels_[4]]),
+            ks_labels_[5] + '_test': float(test_metrics[ks_labels_[5]]),
+
+            # parameters
+            **_best_params}
+    
     # define results file path
     results_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-hyper-{description}.csv'
 
     # load or create DataFrame
-    if os.path.exists(results_path):
-        results_df = pd.read_csv(results_path)
-    else:
-        results_df = pd.DataFrame()
+    results_df = _read_csv_safe(results_path)
 
     # save results
-    results_df = pd.concat([results_df, pd.DataFrame([row])], ignore_index=True)
+    results_df = pd.concat([results_df, pd.DataFrame([row_])], ignore_index=True)
     print(results_df)
 
     results_df.to_csv(results_path, index=False)
     print(f"Saved results to {results_path}")
-
+    
     # define PIT file path
     pit_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-PIT_{time}-{description}.csv'
 
     # load or create DataFrame
-    if os.path.exists(pit_path):
-        pit_df = pd.read_csv(pit_path)
-    else:
-        pit_df = pd.DataFrame()
+    pit_df = _read_csv_safe(pit_path)
 
     # save PIT
-    PIT_ = pd.DataFrame(PIT_)
-    PIT_.columns = [f'H{str(i+1).zfill(2)}' for i in range(len(PIT_.columns))]
-    PIT_['initialization'] = init
-    PIT_['time'] = time
+    pit_ = pd.DataFrame(pit_)
+    pit_.columns = [f'H{str(i+1).zfill(2)}' for i in range(len(pit_.columns))]
+    pit_['initialization'] = init
+    pit_['time'] = time
 
-    pit_df = pd.concat([pit_df, PIT_], axis = 0, ignore_index=True)
+    pit_df = pd.concat([pit_df, pit_], axis = 0, ignore_index=True)
     print(pit_df)
 
     pit_df.to_csv(pit_path, index = False)
     print(f"Saved PIT to {pit_path}")
 
-    # define STD file path
-    std_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-STD_{time}-{description}.csv'
+    # define STATS file path
+    stat_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-STATS_{time}-{description}.csv'
 
     # load or create DataFrame
-    if os.path.exists(std_path):
-        std_df = pd.read_csv(std_path)
-    else:
-        std_df = pd.DataFrame()
+    stat_df = _read_csv_safe(stat_path)
 
-    # save STD
-    STD_['initialization'] = init
+    # save STATS
+    stat_['initialization'] = init
 
-    std_df = pd.concat([std_df, STD_], axis = 0, ignore_index=True)
-    print(std_df)
+    stat_df = pd.concat([stat_df, stat_], axis = 0, ignore_index=True)
+    print(stat_df)
 
-    std_df.to_csv(std_path, index = False)
-    print(f"Saved STD to {std_path}")
+    stat_df.to_csv(stat_path, index = False)
+    print(f"Saved STAT to {stat_path}")
 
-if rank == 0:
+    # define functions file path
+    func_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-functions_{time}-{description}.csv'
+
+    # load or create DataFrame
+    func_df = _read_csv_safe(func_path)
+
+    # save functions
+    func_['initialization'] = init
+
+    func_df = pd.concat([func_df, func_], axis = 0, ignore_index=True)
+    print(func_df)
+
+    func_df.to_csv(func_path, index = False)
+    print(f"Saved FUNCTIONS to {func_path}")
+
+if RANK == 0:
     print('----- ENVELOPE VALIDATION -----')
 
-local_results = _run_ffc_envelop_parallel_mpi(_DATA, hyper_shared, 
-                                              processes_ = processes_val_, 
-                                              fractions_ = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+local_results = _run_ffc_envelop_parallel_mpi(_data, _best_params, processes_val_, 
+                                              fractions_ = np.linspace(0.1, 0.9, 17),
                                               alpha_ = [0.1, 0.2, 0.3, 0.4],
                                               distances_ = ['MBD', 'l2', 'sup', 'fknn'],
                                               time = time)
 
 # Gather all local results
-all_results = comm.gather(local_results, root=0)
+results_ = COMM.gather(local_results, root=0)
 
-if rank == 0:
+if RANK == 0:
 
     # Only root processes all gathered result
-    all_results = np.concatenate(all_results, axis=0)
-    all_results = pd.DataFrame(all_results, columns = ['time',
-                                                       'asset',
-                                                       'day',
-                                                       'alpha',
-                                                       'fraction',
-                                                       'distance',
-                                                       'n_scen',
-                                                       'n_scen_evenlop',
-                                                       'FIS',
-                                                       'FCS'])
+    results_ = np.concatenate(results_, axis=0)
+    results_df = pd.DataFrame(results_, columns = ['time',
+                                                   'asset',
+                                                   'day',
+                                                   'alpha',
+                                                   'fraction',
+                                                   'distance',
+                                                   'n_scen',
+                                                   'n_scen_evenlop',
+                                                   'FIS',
+                                                   'FCS',
+                                                   'SCP'])
 
-    all_results['FIS'] = all_results['FIS'].astype(float)
-    all_results['FCS'] = all_results['FCS'].astype(float)
-    all_results['alpha'] = all_results['alpha'].astype(float)
+    results_df['FIS'] = results_df['FIS'].astype(float)
+    results_df['FCS'] = results_df['FCS'].astype(float)
+    results_df['SCP'] = results_df['SCP'].astype(float)
+    results_df['alpha'] = results_df['alpha'].astype(float)
 
-    agg_results = all_results.groupby(['time', 
-                                       'alpha', 
-                                       'distance', 
-                                       'fraction']).agg({'FIS': 'median',
-                                                         'FCS': 'median'}).reset_index(drop = False)
+    agg_results = results_df.groupby(['time', 
+                                      'alpha', 
+                                      'distance', 
+                                      'fraction']).agg({'FIS': 'mean',
+                                                        'FCS': 'mean',
+                                                        'SCP': 'mean'}).reset_index(drop = False)
 
     agg_results['FCS'] = (agg_results['FCS'] - (1 - agg_results['alpha']))**2            
+    agg_results['SCP'] = (agg_results['SCP'] - (1 - agg_results['alpha']))**2            
 
     best_results_fis_ = agg_results.loc[agg_results.groupby(['time', 'alpha', 'distance'])['FIS'].idxmin()].reset_index(drop=True)
     best_results_fis_ = best_results_fis_[['time', 'alpha', 'fraction', 'distance']]
@@ -762,23 +836,28 @@ if rank == 0:
     best_results_fcs_['iteration'] = init
     best_results_fcs_['score'] = 'FCS'
 
-    best_results = pd.concat([best_results_fis_, best_results_fcs_], axis = 0).reset_index(drop=True)
+    best_results_scp_ = agg_results.loc[agg_results.groupby(['time', 'alpha', 'distance'])['SCP'].idxmin()].reset_index(drop=True)
+    best_results_scp_ = best_results_scp_[['time', 'alpha', 'fraction', 'distance']]
+    best_results_scp_['iteration'] = init
+    best_results_scp_['score'] = 'SCP'
+
+    best_results = pd.concat([best_results_fis_, best_results_fcs_, best_results_scp_], axis = 0).reset_index(drop=True)
     print(best_results)
 
     # Overwrite the CSV with the updated data
-    # scores_.to_csv(path_to_validation + f'/{resource}/{resource}_{method}_zone-envelop-validation_{time}-{description}.csv', index = False)
+    # scores_.to_csv(path_to_validation + f'/{resource}/{resource}_{method}_zone-envelope-validation_{time}-{description}.csv', index = False)
 
-comm.Barrier()
+COMM.Barrier()
 
 # Broadcast inputs (only needed if not already shared)
-if rank == 0:
+if RANK == 0:
     print('----- ENVELOPE TEST -----')
     best_results_shared = best_results
 else:
     best_results_shared = None
 
 # Broadcast envelop parameters
-best_results_shared = comm.bcast(best_results_shared, root=0)
+best_results_shared = COMM.bcast(best_results_shared, root=0)
 
 for score in best_results_shared['score'].unique():
     for distance in best_results_shared['distance'].unique():
@@ -791,56 +870,111 @@ for score in best_results_shared['score'].unique():
             (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 
             'alpha'].astype(float).tolist()
 
-        local_results = _run_ffc_envelop_parallel_mpi(_DATA, hyper_shared, 
-                                                      processes_ = processes_test_, 
+        local_results = _run_ffc_envelop_parallel_mpi(_data, _best_params, processes_test_, 
                                                       distances_ = [distance],
                                                       alpha_ = alpha_,
-                                                      time = time, 
-                                                      k_ = k_)
+                                                      k_ = k_,
+                                                      time = time)
 
         # Gather all local results
-        all_results = comm.gather(local_results, root=0)
+        results_ = COMM.gather(local_results, root=0)
 
-        if rank == 0:
+        if RANK == 0:
             # Only root processes all gathered result
-            all_results = np.concatenate(all_results, axis=0)
-            all_results = pd.DataFrame(all_results, columns = ['time',
-                                                               'asset',
-                                                               'day',
-                                                               'alpha',
-                                                               'fraction',
-                                                               'distance',
-                                                               'n_scen',
-                                                               'n_scen_evenlop',
-                                                               'FIS',
-                                                               'FCS'])
+            results_ = np.concatenate(results_, axis=0)
+            results_ = pd.DataFrame(results_, columns = ['time',
+                                                         'asset',
+                                                         'day',
+                                                         'alpha',
+                                                         'fraction',
+                                                         'distance',
+                                                         'n_scen',
+                                                         'n_scen_evenlop',
+                                                         'FIS',
+                                                         'FCS',
+                                                         'SCP'])
 
-            all_results['FIS'] = all_results['FIS'].astype(float)
-            all_results['FCS'] = all_results['FCS'].astype(float)
-            all_results['alpha'] = all_results['alpha'].astype(float)
+            results_['FIS'] = results_['FIS'].astype(float)
+            results_['FCS'] = results_['FCS'].astype(float)
+            results_['SCP'] = results_['SCP'].astype(float)
+            results_['alpha'] = results_['alpha'].astype(float)
 
-            all_results = all_results.groupby(['time', 
-                                               'alpha']).agg({'FIS': 'median',
-                                                              'FCS': 'median'}).reset_index(drop = False)
+            results_ = results_.groupby(['time', 
+                                         'alpha']).agg({'FIS': 'mean',
+                                                        'FCS': 'mean',
+                                                        'SCP': 'mean'}).reset_index(drop = False)
             
-            all_results['score'] = score
-            all_results['fraction'] = k_
-            all_results['distance'] = distance
-            all_results['iteration'] = init
+            results_['score'] = score
+            results_['fraction'] = k_
+            results_['distance'] = distance
+            results_['iteration'] = init
 
             # define envelop file path
-            results_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-envelop-{description}.csv'
+            results_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-envelope-{description}.csv'
 
             # load or create DataFrame
-            if os.path.exists(results_path):
-                results_df = pd.read_csv(results_path)
-            else:
-                results_df = pd.DataFrame()
+            results_df = _read_csv_safe(results_path)
 
             # append safely
-            results_df = pd.concat([results_df, all_results], axis = 0, ignore_index=True)
+            results_df = pd.concat([results_df, results_], axis = 0, ignore_index=True)
             print(results_df)
 
             # save enevelop
             results_df.to_csv(results_path, index=False)
             print(f"Saved results to {results_path}")
+
+k_ = [None, None, None, None]
+distance = 'ECDF'
+score = None
+local_results = _run_ffc_envelop_parallel_mpi(_data, _best_params, processes_test_, 
+                                              distances_ = [distance],
+                                              alpha_ = ALPHAS,
+                                              k_ = k_,
+                                              time = time)
+
+# Gather all local results
+results_ = COMM.gather(local_results, root=0)
+
+if RANK == 0:
+    # Only root processes all gathered result
+    results_ = np.concatenate(results_, axis=0)
+    results_ = pd.DataFrame(results_, columns = ['time',
+                                                 'asset',
+                                                 'day',
+                                                 'alpha',
+                                                 'fraction',
+                                                 'distance',
+                                                 'n_scen',
+                                                 'n_scen_evenlop',
+                                                 'FIS',
+                                                 'FCS',
+                                                 'SCP'])
+
+    results_['FIS'] = results_['FIS'].astype(float)
+    results_['FCS'] = results_['FCS'].astype(float)
+    results_['SCP'] = results_['SCP'].astype(float)
+    results_['alpha'] = results_['alpha'].astype(float)
+
+    results_ = results_.groupby(['time', 
+                                 'alpha']).agg({'FIS': 'mean',
+                                                'FCS': 'mean',
+                                                'SCP': 'mean'}).reset_index(drop = False)
+    
+    results_['score'] = score
+    results_['fraction'] = k_
+    results_['distance'] = distance
+    results_['iteration'] = init
+
+    # define envelop file path
+    results_path = path_to_validation + f'/{resource}/{resource}_{method}_zone-envelope-{description}.csv'
+
+    # load or create DataFrame
+    results_df = _read_csv_safe(results_path)
+        
+    # append safely
+    results_df = pd.concat([results_df, results_], axis = 0, ignore_index=True)
+    print(results_df)
+
+    # save enevelop
+    results_df.to_csv(results_path, index=False)
+    print(f"Saved results to {results_path}")

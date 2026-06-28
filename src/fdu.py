@@ -10,7 +10,7 @@ from statsmodels.distributions.empirical_distribution import ECDF
 class functional_dynamic_update:
     
     def __init__(self, 
-                 _distances = {'spatial': 'None', 'temporal': 'None'},
+                 _distances = {'spatial': 'None', 'temporal': 'None', 'fusion': 'None'},
                  name = 'noname', 
                  date = 'nodate'):
 
@@ -19,28 +19,33 @@ class functional_dynamic_update:
         self.date = date
 
     # Define exponential growth function
-    def _exponential_growth(self, t, growth_rate):
-        tau_ = np.linspace(t - 1, 0, t)
-        return np.exp(np.log(0.5)*tau_/(growth_rate*12))
+    def _exponential_growth(self, t, growth_rate, n_samples_per_hour):
+        tau_ = np.linspace(t - 1, 0, t)/n_samples_per_hour
+        return np.exp(np.log(0.5)*tau_/growth_rate)
 
     # Define exponential decay function
-    def _exponential_decay(self, S, decay_rate):
-        s_ = np.linspace(0, S - 1, S)
-        return np.exp(np.log(0.5)*s_/(decay_rate*12))    
+    def _exponential_decay(self, S, decay_rate, n_samples_per_hour):
+        s_ = np.linspace(0, S - 1, S)/n_samples_per_hour
+        return np.exp(np.log(0.5)*s_/decay_rate)    
     
     # def _logistic(x_, k):
     #     return 1. - 1.0 / (1.0 + np.exp(np.log(999) * x_ / (k*60/2)))
 
     # Linear Inverse Exponential (LIE) function
-    def _linear_inverse_exponential(self, x_, T, nu, trust_rate, 
+    def _linear_inverse_exponential(self, x_, T, nu, trust_rate, n_samples_per_hour,
                                     k = 2.5, 
                                     alpha = 1.):
+        minutes_per_sample = 60 / n_samples_per_hour
+        T_minutes = T * minutes_per_sample
+        nu_minutes = nu * 60
         
-        x_ = x_ - T*5 + nu*5*12
-        x_ = k*x_/(nu*5*12 - 5)
-        y_ = np.where(x_ > 0, -x_, -alpha*(np.exp(x_) - 1))
-        y_ = (y_ + k)/(k + alpha)
-        return trust_rate*y_
+        x_ = x_ - T_minutes + nu_minutes
+        x_ = k * x_ / (nu_minutes - minutes_per_sample)
+        
+        y_ = np.where(x_ > 0, -x_, -alpha * (np.exp(x_) - 1))
+        y_ = (y_ + k) / (k + alpha)
+        
+        return trust_rate * y_
 
     # Calculate weighted (w_) distance between X_ and x_
     def _weighted_euclidian_dist(self, X_, x_, w_ = []):
@@ -143,8 +148,8 @@ class functional_dynamic_update:
                                scale = 2):
         
         d_prime_spring = np.absolute(80 - d2)
-        d_prime_fall   = np.absolute(266 - d2)
-        d_prime        = np.min([d_prime_spring, d_prime_fall]) 
+        d_prime_fall = np.absolute(266 - d2)
+        d_prime = np.min([d_prime_spring, d_prime_fall]) 
 
         if gamma is None:
             return self._equinox_dist(d1, d2, d_prime, thr)
@@ -166,124 +171,34 @@ class functional_dynamic_update:
     # Radial Basis function kernel based on distance (d_)
     def _rbf_kernel(self, d_, length_scale):
         return np.exp(-d_ / length_scale)
-        
-    # # Filtering neighboring curves above a threshold
-    # def _neighborhood_filtering(self, w_, d_spatial_, d_temporal_, xi, gamma, clique_order, kappa):
-    
-    #     sigma = None
-    #     # Filter by similarity
-    #     idx_ = np.arange(w_.shape[0], dtype = int)
-    #     idx_neighbors_ = idx_[w_ >= xi]
 
-    #     if d_temporal_ is None:
-    #         idx_temporal_ = idx_neighbors_.copy()
-    #     else:
-    #         idx_temporal_ = idx_[idx_neighbors_][d_temporal_[idx_neighbors_] <= gamma]
-            
-    #     if (idx_temporal_.shape[0] < kappa) or (d_spatial_ is None):  
-    #         # Increase similarity threshold 
-    #         idx_spatial_ = idx_[w_ >= np.sort(w_)[::-1][kappa]][:kappa]
-    
-    #     else: 
-    #         # Rank neighbors by Haversine distance
-    #         idx_spatial_rank_ = np.argsort(d_spatial_[idx_temporal_])
-    
-    #         # Select the kappa_max closest neibors
-    #         idx_spatial_ = idx_temporal_[idx_spatial_rank_][:kappa]
-    
-    #         # What is the distance threshold?
-    #         sigma = d_h_[idx_spatial_].max()
-    
-    #     return idx_neighbors_, idx_temporal_, idx_spatial_, sigma
-
-    # # Filtering neighboring curves above a threshold
-    # def _neighborhood_filtering(self, w_, d_spatial_, d_temporal_, xi, clique_order, gamma, kappa):
-    
-    #     sigma = None
-    #     idx_ = np.arange(w_.shape[0], dtype=int)
-    
-    #     # 1. Probability filter
-    #     idx_neighbors_ = idx_[w_ >= xi]
-
-    #     # 2. Temporal filter
-    #     if d_temporal_ is not None:
-    #         #print('Temporal filer...')
-    #         idx_temporal_ = idx_neighbors_[d_temporal_[idx_neighbors_] <= gamma]
-    #     else:
-    #         idx_temporal_ = idx_neighbors_.copy()
-    #     #print(idx_temporal_.shape)
-    #     # 3. Spatial / graph filtering
-    #     if d_spatial_ is not None:
-    #         #print('Spatial filer...')
-    #         if clique_order is None:
-    #             #print('Metric filer...')
-    #             # --- Metric space (continuous distance) ---
-    #             if idx_temporal_.shape[0] >= kappa:
-    #                 idx_sorted = np.argsort(d_spatial_[idx_temporal_])
-    #                 idx_spatial_ = idx_temporal_[idx_sorted[:kappa]]
-    #                 sigma = d_spatial_[idx_spatial_].max()
-    #             else:
-    #                 idx_spatial_ = idx_temporal_.copy()
-    #         else:
-    #             #print('Clique filer...')
-    #             # --- Graph space (clique neighborhood) ---
-    #             # keep only nodes within clique_order hops
-    #             idx_clique_ = idx_temporal_[d_spatial_[idx_temporal_] <= clique_order]
-
-    #             if idx_clique_.shape[0] >= kappa:
-    #                 # choose top-k by probability inside clique
-    #                 idx_sorted = np.argsort(w_[idx_clique_])[::-1]
-    #                 idx_spatial_ = idx_clique_[idx_sorted[:kappa]]
-    #             else:
-    #                 # not enough nodes in clique → fallback to temporal set
-    #                 idx_sorted = np.argsort(w_[idx_temporal_])[::-1]
-    #                 idx_spatial_ = idx_temporal_[idx_sorted[:kappa]]
-    
-    #     else:
-    #         # No spatial info → just use probability
-    #         idx_sorted = np.argsort(w_[idx_temporal_])[::-1]
-    #         idx_spatial_ = idx_temporal_[idx_sorted[:kappa]]
-    
-    #     return idx_neighbors_, idx_temporal_, idx_spatial_, sigma
-
-    # def _graph_neighborhood_filtering(self, w_, d_spatial_, d_temporal_, xi, gamma, clique_order, kappa):
-
-    #     sigma = None
-    #     # Filter by similarity
-    #     idx_ = np.arange(w_.shape[0], dtype = int)
-
-    #     if d_temporal_ is None:
-    #         idx_temporal_ = idx_neighbors_.copy()
-    #     else:
-    #         idx_temporal_ = idx_[idx_neighbors_][d_temporal_[idx_neighbors_] <= gamma]
-            
-    #     if (idx_temporal_.shape[0] < kappa) or (d_spatial_ is None):  
-    #         # Increase similarity threshold 
-    #         idx_spatial_ = idx_[w_ >= np.sort(w_)[::-1][kappa]][:kappa]
-    
-    #     else: 
-    #         idx_spatial_ = idx_[idx_temporal_][w_[idx_temporal_] >= np.sort(w_[idx_temporal_])[::-1][kappa]][:kappa]
-
-    #     return idx_neighbors_, idx_temporal_, idx_spatial_, sigma
-
+    # Filter by similarity distance
     def _similarity_filter(self, w_, xi, kappa):
-        idx_ = np.arange(w_.shape[0], dtype=int)
-        idx_neighbors_ = idx_[w_ >= xi]
-        if idx_neighbors_.shape[0] < kappa:
-            return idx_.copy()
-        else:
-            return idx_neighbors_
 
+        # Initialize index
+        idx_ = np.arange(w_.shape[0], dtype=int)
+        
+        # Similarity threshold
+        idx_neighbors_ = idx_[w_ >= xi]
+
+        # Only apply filter if enough samples
+        if idx_neighbors_.shape[0] < kappa:
+            return idx_.copy(), True
+        else:
+            return idx_neighbors_, False
+
+    # Filter by temporal distance
     def _temporal_filter(self, idx_neighbors_, d_temporal_, gamma, kappa):
         if d_temporal_ is None:
             idx_temporal_ = idx_neighbors_.copy()
         else:
             idx_temporal_ = idx_neighbors_[d_temporal_[idx_neighbors_] <= gamma]
 
+        # Only apply filter if enough samples
         if idx_temporal_.shape[0] < kappa:
-            idx_temporal_ = idx_neighbors_.copy()
-
-        return idx_temporal_
+            return idx_neighbors_.copy(), True
+        else:
+            return idx_temporal_, False
 
     def _spatial_metric_filter(self, idx_temporal_, d_spatial_, kappa):
         sigma = None
@@ -334,19 +249,27 @@ class functional_dynamic_update:
             # Last observations of neighboring curves 
             m_0_[j] = F_tr_[i, t - 1]
 
-            # Calculate the probability of fusing
-            p0 = np.sum(F_[j, :] == 0)/F_[j, :].shape[0]
-            pf = p_fusion * (1. - trust_rate) / np.clip(1. - p0, eps, 1. - eps)
-
             # Probability of fusion rejection
-            if np.random.uniform(0., 1., size=1)[0] < pf:
-                M_[j, :] = F_[j, :]
+            if self._distances['fusion'] == 'dynamic':
+                # Calculate the probability of fusing
+                p0 = (np.sum(F_[j, :] == 0) + np.sum(F_[j, :] == 1))/F_[j, :].shape[0]
+                pf = p_fusion * (1. - trust_rate) / np.clip(1. - p0, eps, 1. - eps)
+
+                # Probability of fusion rejection
+                if np.random.uniform(0., 1., size=1)[0] < pf:
+                    M_[j, :] = F_[j, :]
+                else:
+                    M_[j, :] = F_[j, :] * (1. - eta_)  + E_[j, :] * eta_   
             else:
-                M_[j, :] = F_[j, :] * (1. - eta_)  + E_[j, :] * eta_
-        
+                if np.random.uniform(0., 1., size=1)[0] < p_fusion:
+                    M_[j, :] = F_[j, :] * (1. - eta_) + E_[j, :] * eta_
+                else:
+                    M_[j, :] = F_[j, :]
+
         return M_, m_0_
 
     def fit(self, F_, E_, dt_, 
+            n_samples_per_hour = 1,
             X_ = None, 
             t_ = None, 
             interval_mask = None):
@@ -360,7 +283,7 @@ class functional_dynamic_update:
         # Temporal structure in the curves
         self.dt_ = dt_
         self.T = self.dt_.shape[0]
-
+        self.n_samples_per_hour = n_samples_per_hour
         # Temporal filter to apply to intervals
         if interval_mask is None:
             interval_mask = np.ones(self.dt_.shape, dtype = bool)
@@ -460,13 +383,13 @@ class functional_dynamic_update:
             self.gamma_prime = self._seasonal_equinox_dist(self.t, self.t, self.gamma)
 
         # phi: importance weights based on past time distance
-        self.phi_ = self._exponential_growth(self.interval, self.forget_rate_f)
+        self.phi_ = self._exponential_growth(self.interval, self.forget_rate_f, self.n_samples_per_hour)
         # Mask intervals
         self.phi_[~self.interval_mask[:self.interval]] = 0.
         
         # psi: importance weights based on past and future time distance
-        psi_minus_ = self._exponential_growth(self.interval, self.forget_rate_e)
-        psi_plus_ = self._exponential_decay(self.S, self.lookup_rate_e)
+        psi_minus_ = self._exponential_growth(self.interval, self.forget_rate_e, self.n_samples_per_hour)
+        psi_plus_ = self._exponential_decay(self.S, self.lookup_rate_e, self.n_samples_per_hour)
         self.psi_ = np.concatenate([psi_minus_, psi_plus_], axis = 0)
 
         # Mask intervals
@@ -474,7 +397,7 @@ class functional_dynamic_update:
         
         # eta: importance weights based on future time distance
         #eta_ = _logistic(s_ - t*5 - nu*60., trust_rate)
-        self.eta_ = self._linear_inverse_exponential(self.s_[::-1], self.T*12, self.nu, self.trust_rate_e)
+        self.eta_ = self._linear_inverse_exponential(self.s_[::-1], self.T, self.nu, self.trust_rate_e, self.n_samples_per_hour)
 
         # d: Euclidean similarity distance between samples weighted by importance weights
         self.d_f_ = self._weighted_euclidian_dist(self.F_[:, :self.interval], self.f_, w_ = self.phi_)
@@ -488,10 +411,10 @@ class functional_dynamic_update:
         self.w_ = np.min(np.stack([self.w_f_, self.w_e_]), axis = 0)
 
         # Similarity filter
-        self.idx_neighbors_ = self._similarity_filter(self.w_, self.xi, self.kappa)
+        self.idx_neighbors_, self.sparse_neighborhood = self._similarity_filter(self.w_, self.xi, self.kappa)
 
         # Temporal filter
-        self.idx_temporal_ = self._temporal_filter(self.idx_neighbors_, self.d_temporal_, self.gamma_prime, self.kappa)
+        self.idx_temporal_, self.sparse_temporal = self._temporal_filter(self.idx_neighbors_, self.d_temporal_, self.gamma_prime, self.kappa)
 
         # spatial filter: Euclidean or Haversine spatial distance between samples
         if (self._distances['spatial'] == 'euclidean') or (self._distances['spatial'] == 'haversine'):
@@ -505,18 +428,6 @@ class functional_dynamic_update:
         if self.idx_spatial_.shape[0] > self.kappa:
             idx_ = np.argsort(self.w_[self.idx_temporal_])[::-1]
             self.idx_spatial_ = self.idx_temporal_[idx_[:self.kappa]]
-
-        # # Filter neighbors by temporal (seasonal) and spatial (Haversine) distance
-        # (self.idx_neighbors_, 
-        # self.idx_temporal_, 
-        # self.idx_spatial_, 
-        # self.sigma) = self._neighborhood_filtering(self.w_,
-        #                                            self.d_spatial_, 
-        #                                            self.d_temporal_, 
-        #                                            self.xi, 
-        #                                            self.clique_order,
-        #                                            self.gamma_prime, 
-        #                                            self.kappa)
 
         # Fuse neighboring curves with day-ahead forecasts
         self.M_, self.m_0_ = self._fuse_curves(self.F_, 
