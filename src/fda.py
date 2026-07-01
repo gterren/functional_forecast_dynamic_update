@@ -51,55 +51,55 @@ def _fPCA_pred(X_tr_, X_ts_, path):
 def _fDepth(X_, depth, path):
     
     # Save input data
-    pd.DataFrame(X_).to_csv(path + '/curves.csv', 
+    pd.DataFrame(X_).to_csv(path / 'curves.csv', 
                             header = False, 
                             index = False)
 
     # Modified Band Depth .R routine
     if depth == 'MBD':   
-        subprocess.call(['Rscript', path + '/fDepth_MBD.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_MBD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Band Depth .R routine
     elif depth == 'BD':  
-        subprocess.call(['Rscript', path + '/fDepth_BD.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_BD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Directional Quantile .R routine
     elif depth == 'DQ':  
-        subprocess.call(['Rscript', path + '/fDepth_DQ.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_DQ.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Extreme Rank Length .R routine
     elif depth == 'ERL': 
-        subprocess.call(['Rscript', path + '/fDepth_ERL.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_ERL.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Extreme Depth .R routine
     elif depth == 'ED':  
-        subprocess.call(['Rscript', path + '/fDepth_ED.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_ED.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Modal Depth .R routine
     elif depth == 'MD':  
-        subprocess.call(['Rscript', path + '/fDepth_MD.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_MD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Integrated Depth .R routine
     elif depth == 'ID':  
-        subprocess.call(['Rscript', path + '/fDepth_ID.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_ID.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # L-inf Depth .R routine
     elif depth == 'LD':  
-        subprocess.call(['Rscript', path + '/fDepth_LD.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_LD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
@@ -111,19 +111,19 @@ def _fDepth(X_, depth, path):
         
     # Random Tukey Depth .R routine
     elif depth == 'RT':  
-        subprocess.call(['Rscript', path + '/fDepth_RT.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_RT.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Magnitude-Shape Plot (MS Plot): Mean Outlyingness | path Outlyingness .R routine
     elif depth == 'MSplot':  
-        subprocess.call(['Rscript', path + '/fDepth_MSplot.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_MSplot.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Outliergram: Modified Band Depth | Modified Epigraph Index .R routine
     elif depth == 'Outliergram':  
-        subprocess.call(['Rscript', path + '/fDepth_Outliergram.R'], 
+        subprocess.call(['Rscript', path / 'fDepth_Outliergram.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
@@ -131,79 +131,79 @@ def _fDepth(X_, depth, path):
         print('Does not exist')
         
     # Read output data
-    return pd.read_csv(path + '/fDepth.csv', 
+    return pd.read_csv(path / 'fDepth.csv', 
                        index_col = None)
 
-# Boostrapped Functional Depths 
+# Bootstrapped Functional Depths 
 def _bootstrap_fDepth(X_, alpha_, depth, path):
     
     # Save input curves
-    pd.DataFrame(X_).to_csv(path + '/curves.csv', 
+    pd.DataFrame(X_).to_csv(path / 'curves.csv', 
                             header = False, 
                             index = False)
     
     # Save confidence bands
-    pd.DataFrame(alpha_).to_csv(path + '/bands.csv', 
+    pd.DataFrame(alpha_).to_csv(path / 'bands.csv', 
                                 header = False, 
                                 index = False)
 
     # Modified Band Depth .R routine
     if depth == 'MBD':   
-        subprocess.call(['Rscript', path + '/bootstrap_MBD.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_MBD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Band Depth .R routine
     elif depth == 'BD':  
-        subprocess.call(['Rscript', path + '/bootstrap_BD.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_BD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Directional Quantile .R routine
     elif depth == 'DQ':  
-        subprocess.call(['Rscript', path + '/bootstrap_DQ.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_DQ.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Extreme Rank Length .R routine
     elif depth == 'ERL': 
-        subprocess.call(['Rscript', path + '/bootstrap_ERL.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_ERL.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Extreme Depth .R routine
     elif depth == 'ED':  
-        subprocess.call(['Rscript', path + '/bootstrap_ED.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_ED.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Modal Depth .R routine
     elif depth == 'MD':  
-        subprocess.call(['Rscript', path + '/bootstrap_MD.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_MD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Integrated Depth .R routine
     elif depth == 'ID':  
-        subprocess.call(['Rscript', path + '/bootstrap_ID.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_ID.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # L-inf Depth .R routine
     elif depth == 'LD':  
-        subprocess.call(['Rscript', path + '/bootstrap_LD.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_LD.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Random Projection Depth .R routine
     elif depth == 'RP':  
-        subprocess.call(['Rscript', path + '/bootstrap_RP.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_RP.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
     # Random Tukey Depth .R routine
     elif depth == 'RT':  
-        subprocess.call(['Rscript', path + '/bootstrap_RT.R'], 
+        subprocess.call(['Rscript', path / 'bootstrap_RT.R'], 
                         stdout = subprocess.DEVNULL, 
                         stderr = subprocess.STDOUT)
         
@@ -211,9 +211,10 @@ def _bootstrap_fDepth(X_, alpha_, depth, path):
         print('Does not exist')
         
     # Read output data
-    deepest_   = pd.read_csv(path + '/deepest.csv', index_col = None).to_numpy()[:, 0]
-    inf_bands_ = pd.read_csv(path + '/inf_bands.csv', index_col = None)
-    sup_bands_ = pd.read_csv(path + '/sup_bands.csv', index_col = None)
+    deepest_ = pd.read_csv(path / 'deepest.csv', index_col = None)
+    deepest_ = deepest_.to_numpy()[:, 0]
+    inf_bands_ = pd.read_csv(path / 'inf_bands.csv', index_col = None)
+    sup_bands_ = pd.read_csv(path / 'sup_bands.csv', index_col = None)
 
     return deepest_, inf_bands_, sup_bands_
 
@@ -221,15 +222,15 @@ def _bootstrap_fDepth(X_, alpha_, depth, path):
 def _fQuantile(X_, path):
     
     # Save input data
-    pd.DataFrame(X_).to_csv(path + '/curves.csv', header = False, index = False)
+    pd.DataFrame(X_).to_csv(path / 'curves.csv', header = False, index = False)
 
     # Directional Quantile .R routine
-    subprocess.call(['Rscript', path + '/fDepth_DQ_multi-quantile.R'], 
+    subprocess.call(['Rscript', path / 'fDepth_DQ_multi-quantile.R'], 
                     stdout = subprocess.DEVNULL, 
                     stderr = subprocess.STDOUT)
 
     # Read output data
-    return pd.read_csv(path + '/fDepth.csv', index_col = None)
+    return pd.read_csv(path / 'fDepth.csv', index_col = None)
     
 # Derive confidence bands from a functional depth metric
 def _confidence_bands_from_fDepth(M_, alpha_, depth, path):
