@@ -1,7 +1,9 @@
 import ee, geemap, datetime, calendar
 
 import numpy as np
+import pandas as pd
 import geopandas as gpd
+import networkx as nx
 
 import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
@@ -19,6 +21,8 @@ from cartopy.mpl.geoaxes import GeoAxes
 from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter
 
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+from src.utils import KS
 
 plt.rcParams["legend.handlelength"] = 1
 plt.rcParams["legend.handleheight"] = 1.125
@@ -49,7 +53,7 @@ def plot_histogram_cuts(
         z_ = np.exp(KDs_[slice].score_samples(x_))
 
         _ax[i].axvline(
-            100 * f_hat_[slice],
+            100*f_hat_[slice],
             color=palette_.loc[0, "ibm"],
             lw=2,
             ls="--",
@@ -58,7 +62,7 @@ def plot_histogram_cuts(
         )
 
         _ax[i].axvline(
-            100 * e_[interval + slice],
+            100 * e_[interval + slice - 1],
             color="k",
             lw=2,
             # label="CF (forecast)",
@@ -85,7 +89,7 @@ def plot_histogram_cuts(
             zorder=9
         )
 
-        _ax[i].set_title(dx_[interval:][slice], size=12)
+        _ax[i].set_title(dx_[interval - 1:][slice], size=12)
         _ax[i].set_xlim(0, 100)
         _ax[i].set_ylim(0,)
 
@@ -107,6 +111,7 @@ def plot_heatmap_slices(
     dx_, 
     dt_, 
     interval, 
+    n=120,
     slices_=[], 
     range_=[],
     colorbar=True
@@ -118,7 +123,7 @@ def plot_heatmap_slices(
     Z_ = []
     for i in range(M_.shape[1]):
         a_, b_ = np.histogram(
-            100.* M_[:, i], 
+            100*M_[:, i], 
             bins=25, 
             range=(0, 100), 
             density=True
@@ -127,38 +132,56 @@ def plot_heatmap_slices(
         Z_.append(a_)
 
     Z_ = np.stack(Z_).T
-    X_, Y_ = np.meshgrid(dt_[interval:], (b_[1:] + b_[:-1])/2.0)
+    X_, Y_ = np.meshgrid(
+        dt_[interval:], (b_[1:] + b_[:-1])/2.
+    )
 
     _cmap = sns.color_palette("rocket_r", as_cmap=True)
     _ax.pcolormesh(X_, Y_, Z_, cmap=_cmap)
+
+    _ax.axvline(
+        dt_[interval - 1], 
+        color="k", 
+        label=r"Forecast Update time $\tau$", 
+        linewidth=0.75, 
+        zorder=11
+    )
 
     _ax.plot(
         tau_,
         100 * f_,
         c=palette_.loc[0, "ibm"],
-        clip_on=False,
+        clip_on=True,
         lw=2.0,
-        label="CF (actual)",
+        label=r"Realized CF $f_{\star}(t)$",
         zorder=9,
     )
 
     _ax.plot(
         s_,
-        100 * f_hat_,
+        100*f_hat_,
         c=palette_.loc[0, "ibm"],
-        clip_on=False,
+        clip_on=True,
         lw=2.0,
         ls="--",
         zorder=9,
     )
 
     _ax.plot(dt_, 
-             100 * e_, 
+             100*e_, 
              c="k", 
              lw=2.0, 
-             label="CF (forecast)", 
-             clip_on=False, 
+             label=r"Forecast CF $e_{\star}(t)$", 
+             clip_on=True, 
              zorder=8
+    )
+
+    _ax.fill_between(
+        tau_, 
+        100*np.ones(tau_.shape), 
+        100*np.zeros(tau_.shape),
+        color="lightgray",
+        alpha=0.5,
     )
 
     _ax.axvline(
@@ -171,40 +194,30 @@ def plot_heatmap_slices(
 
     for slice in slices_:
         _ax.axvline(
-            dt_[interval + slice], 
+            dt_[interval + slice - 1], 
             color="k", 
             lw=0.75, 
             ls="--"
         )
 
-    _ax.fill_between(
-        tau_,
-        100 * np.ones(tau_.shape),
-        100 * np.zeros(tau_.shape),
-        color="lightgray",
-        alpha=0.5,
-    )
-
-    _ax.axvline(
-        dt_[interval], 
-        color="k", 
-        label="Event (update)", 
-        linewidth=0.75, 
-        zorder=11
-    )
-
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+    
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
     _ax.tick_params(axis="both", labelsize=12)
 
-    _ax.set_ylim(0, 101)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
 
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(cmap=_cmap),
-            cax=_ax.inset_axes([40, 77.5, 150, 5], transform=_ax.transData),
+            cax=_ax.inset_axes([300, 75, 150, 5], transform=_ax.transData),
             orientation="horizontal",
             extend="max",
         )
@@ -228,7 +241,10 @@ def plot_updates(
     dx_, 
     dt_, 
     interval, 
-    range_=[]
+    n = 120,
+    range_=[],
+    legend_1=True,
+    legend_2=False,
 ):
 
     tau_ = dt_[:interval]
@@ -243,42 +259,47 @@ def plot_updates(
     _cmap = sns.color_palette("rocket", as_cmap=True)
     _norm = plt.Normalize(0.0, 1)
 
-    _ax.plot([], [], lw=0.75, label=r"$\hat{\mu}_i(s)$", c="k")
+    _ax.plot(
+        [], [], 
+        lw=0.75, 
+        label=r"$\hat{\mu}_i(s)$"if legend_1 else None, 
+        c="k"
+    )
 
     _ax.plot(
         tau_,
-        100.0 * f_,
+        100*f_,
         c=palette_.loc[0, "ibm"],
         zorder=10,
-        # label="CF (ac)",
-        clip_on=False,
+        label=r"Realized CF $f_{\star}(t)$" if legend_2 else None,
+        clip_on=True,
         lw=2,
     )
 
     _ax.plot(
         s_,
-        100.0 * f_hat_,
+        100*f_hat_,
         c=palette_.loc[0, "ibm"],
         zorder=10,
         lw=2,
-        clip_on=False,
+        clip_on=True,
         ls="--",
     )
 
     _ax.plot(
         dt_,
-        100.0 * e_,
+        100*e_,
         lw=2,
         zorder=9,
-        # label="CF (fc)",
-        clip_on=False,
+        label=r"Forecast CF $e_{\star}(t)$" if legend_2 else None, 
+        clip_on=True,
         c="k",
     )
 
     for i, j in zip(idx_, range(idx_.shape[0])):
         _ax.plot(
             dt_[interval:],
-            100 * M_[j, :],
+            100*M_[j, :],
             # c=_cmap(_norm(z_[i])),
             c=_cmap(_norm(j / idx_.shape[0])),
             lw=0.5,
@@ -287,32 +308,37 @@ def plot_updates(
 
     _ax.fill_between(
         tau_,
-        100 * np.ones(tau_.shape),
-        100 * np.zeros(tau_.shape),
+        100*np.ones(tau_.shape),
+        100*np.zeros(tau_.shape),
         color="lightgray",
         alpha=0.5,
         zorder=1,
     )
 
     _ax.axvline(
-        dt_[interval],
+        dt_[interval - 1],
         color="k",
         lw=1.0,
-        # label="Event (update)",
+        label=r"Forecast Update time $\tau$" if legend_2 else None, 
         zorder=11,
     )
 
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
     # ax_[2].set_yticks(size = 12)
-    _ax.set_ylim(0.0, 100.0)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
     _ax.tick_params(axis="both", labelsize=12)
 
     cbar = _fig.colorbar(
         cm.ScalarMappable(_norm, _cmap),
-        cax=_ax.inset_axes([45, 80, 150, 5], transform=_ax.transData),
+        cax=_ax.inset_axes([150, 75, 150, 5], transform=_ax.transData),
         orientation="horizontal",
     )
 
@@ -334,8 +360,11 @@ def plot_neighbors(
     e_, 
     dx_, 
     dt_, 
-    interval, 
-    range_=[]
+    interval,
+    n = 120,
+    range_=[],
+    legend_1=False,
+    legend_2=False,
 ):
 
     tau_ = dt_[:interval]
@@ -350,64 +379,78 @@ def plot_neighbors(
     _ax.plot(
         [], [], 
         lw=0.75, 
-        label=r"$\mathcal{F}_{\star} \left([\tau, s] \right)$", 
+        label=r"$f_{i} (t)$" if legend_1 else None, 
         c="k"
     )
 
     _ax.plot(
         tau_,
-        100 * f_,
+        100*f_,
         c=palette_.loc[0, "ibm"],
         zorder=10,
-        # label="CF (ac)",
+        label=r"Realized CF $f_{\star}(t)$" if legend_2 else None,
         lw=2,
-        clip_on=False,
+        clip_on=True,
     )
 
     _ax.plot(
         s_,
-        100 * f_hat_,
+        100*f_hat_,
         c=palette_.loc[0, "ibm"],
         zorder=10,
         lw=2,
         ls="--",
-        clip_on=False,
+        clip_on=True,
     )
 
     _ax.plot(
         dt_,
-        100 * e_,
+        100*e_,
         lw=2,
         zorder=9,
-        # label="CF (fc)",
+        label=r"Forecast CF $e_{\star}(t)$" if legend_2 else None,
         c="k",
-        clip_on=False,
+        clip_on=True,
     )
 
     for i, j in zip(idx_, range(idx_.shape[0])):
         _ax.plot(
             dt_,
-            100 * F_tr_[i, :],
-            c=_cmap(_norm(j / idx_.shape[0])),
+            100*F_tr_[i, :],
+            c=_cmap(_norm(j/idx_.shape[0])),
             # c=_cmap(_norm(z_[i])),
             lw=0.5,
             zorder=8,
         )
+        
 
     _ax.fill_between(
         tau_,
-        100 * np.ones(tau_.shape),
-        100 * np.zeros(tau_.shape),
+        100*np.ones(tau_.shape),
+        100*np.zeros(tau_.shape),
         color="lightgray",
         alpha=0.5,
         zorder=1,
     )
 
-    _ax.axvline(dt_[interval], color="k", lw=1.0, zorder=11)
+    _ax.axvline(
+        dt_[interval - 1], 
+        color="k", 
+        lw=1.0, 
+        zorder=11,
+        label=r"Forecast Update time $\tau$" if legend_2 else None, 
+    )
 
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
-    _ax.set_ylim(0.0, 101)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+    
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
     _ax.tick_params(axis="both", labelsize=12)
@@ -426,8 +469,10 @@ def plot_forecasts(
     dx_,
     dt_,
     interval,
+    n = 120,
     range_=[],
-    legend=False,
+    legend_1=False,
+    legend_2=False,
 ):
 
     tau_ = dt_[:interval]
@@ -439,28 +484,22 @@ def plot_forecasts(
     _cmap = sns.color_palette("rocket", as_cmap=True)
     _norm = plt.Normalize(0, 1)
 
-    _ax.plot(
-        [], [], 
-        lw=0.75, 
-        label=r"$E_{\star} \left([\tau, s]\right)$", 
-        c="k"
-    )
 
     _ax.plot(
         tau_,
-        100.0 * f_,
+        100*f_,
         c=palette_.loc[0, "ibm"],
-        clip_on=False,
+        clip_on=True,
         zorder=10,
-        # label="CF (ac)",
+        label=r"Realized CF $f_{\star}(t)$" if legend_2 else None,
         lw=2,
     )
 
     _ax.plot(
         s_,
-        100.0 * f_hat_,
+        100*f_hat_,
         c=palette_.loc[0, "ibm"],
-        clip_on=False,
+        clip_on=True,
         zorder=10,
         lw=2,
         ls="--",
@@ -468,11 +507,11 @@ def plot_forecasts(
 
     _ax.plot(
         dt_,
-        100.0 * e_,
-        clip_on=False,
+        100*e_,
+        clip_on=True,
         lw=1.5,
         zorder=9,
-        # label="CF (fc)",
+        label=r"Forecast CF $e_{\star}(t)$" if legend_2 else None, 
         c="k",
     )
 
@@ -495,50 +534,70 @@ def plot_forecasts(
         zorder=1,
     )
 
-    _ax.axvline(dt_[interval], color="k", lw=1.0, zorder=11)
+    _ax.axvline(
+        dt_[interval - 1], 
+        color="k", 
+        lw=1.0, 
+        zorder=11,
+        label=r"Forecast Update time $\tau$" if legend_2 else None, 
+    )
 
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    _ax.plot(
+        [], 
+        [], 
+        lw=0.75, 
+        label=r"$e_i (t)$" if legend_1 else None, 
+        c="k"
+    )
+    
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
 
-    _ax.set_ylim(0.0, 101)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_ylim(0, 100)
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+    #_ax.set_xlim(dt_[0], dt_[-1])
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
     _ax.tick_params(axis="both", labelsize=12)
 
-def plot_envelop(
+def plot_envelope(
     _fig, _ax, palette_, _upper, _lower, m_, f_, f_hat_, 
-    e_, dt_, dx_, interval, color, label,
+    e_, dx_, dt_, interval, color, label,
     CR = 'CR',
     range_ = [],
     n = 120,
     legend_1 = True, 
-    legend_2 = True
+    legend_2 = True,
 ):
 
-    dt   = dt_[1] - dt_[0]
+    dt = dt_[1] - dt_[0]
+    s_ = dt_[interval:]
     tau_ = dt_[:interval]
-    s_   = dt_[interval:]
 
-    _ax.plot(
-        dt_, 100*e_, 
-        c = "k",
-        lw = 2, 
-        clip_on = True,
-        label = "CF (forecast)" if legend_1 else None, 
-        zorder = 8
+    _ax.axvline(
+        dt_[interval - 1], 
+        color = "k", 
+        linewidth = 0.75, 
+        label = r"Forecast Update time $\tau$" if legend_1 else None,
+        zorder = 11
     )
-
+    
     _ax.plot(
-        tau_, 100*f_, 
+        tau_, 
+        100*f_, 
         c = palette_.loc[0, "ibm"], 
         clip_on = True,
-        label = "CF (actual)" if legend_1 else None, 
+        label = "Realized CF $f_{*} (t)$" if legend_1 else None, 
         lw = 2, 
         zorder = 9
     )
     
     _ax.plot(
-        s_, 100*f_hat_, 
+        s_, 
+        100*f_hat_, 
         clip_on = True,
         c = palette_.loc[0, "ibm"], 
         ls = "--", 
@@ -547,7 +606,18 @@ def plot_envelop(
     )
 
     _ax.plot(
-        s_, 100*m_[1:], 
+        dt_, 
+        100*e_, 
+        c = "k",
+        lw = 2, 
+        clip_on = True,
+        label = r"Forecast CF $e_{*} (t)$" if legend_1 else None, 
+        zorder = 8
+    )
+    
+    _ax.plot(
+        s_, 
+        100*m_[1:], 
         c = color, 
         label = label if legend_2 else None,
         lw = 2, 
@@ -556,7 +626,9 @@ def plot_envelop(
     
     colors_ = ["lightgray", "darkgray", "gray", "dimgray"]
     for color, key, i in zip(
-        colors_, _upper.keys(), range(len(_upper.keys()))
+        colors_, 
+        _upper.keys(), 
+        range(len(_upper.keys()))
     ):
 
         u_ = _upper[key]
@@ -571,17 +643,11 @@ def plot_envelop(
         )
 
     _ax.fill_between(
-        tau_, 100 * np.ones(tau_.shape), 100 * np.zeros(tau_.shape),
+        tau_, 
+        100*np.ones(tau_.shape), 
+        100*np.zeros(tau_.shape),
         color = "lightgray",
         alpha = 0.5
-    )
-
-    _ax.axvline(
-        dt_[interval - 1], 
-        color = "k", 
-        linewidth = 0.75, 
-        #label = "Event (update)",
-        zorder = 11
     )
     
     idx_ = (dt_ % n) == 0
@@ -591,55 +657,62 @@ def plot_envelop(
     
     _ax.tick_params(axis = "both", 
                     labelsize = 12)
-    
     _ax.set_ylim(0, 100)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+
     _ax.set_ylabel("Capacity Factor (%)", size = 14)
 
 def plot_forecast_parameters(
     _fig, _ax, palette_, phi_, psi_, eta_, f_, 
     f_hat_, e_, dx_, dt_, interval,
     range_ = [],
+    n = 120,
     labels_1 = False,
     labels_2 = False
 ):
 
     tau_ = dt_[:interval]
-    s_   = dt_[interval:]
-    dt   = dt_[1] - dt_[0]
+    s_ = dt_[interval:]
+    dt = dt_[1] - dt_[0]
 
+    _ax.axvline(
+        dt_[interval - 1], 
+        color="k", 
+        lw=0.75,
+        label=r"Forecast Update Time $\tau$" if labels_1 else None, 
+        zorder=6
+    )
+    
     _ax.plot(
-        tau_ + dt, 100. * f_, 
+        tau_, 
+        100*f_, 
         c=palette_.loc[0, "ibm"], 
-        label="CF (actual)" if labels_1 else None, 
+        label=r"Realized CF $f_{\star}(t)$" if labels_1 else None, 
         lw=1.5, 
         zorder=5
     )
 
-    _ax.plot(s_ + dt, 100. * f_hat_, 
-             c=palette_.loc[0, "ibm"], 
-             lw=1.5, 
-             ls="--", 
-             zorder=5)
+    _ax.plot(
+         s_, 
+         100*f_hat_, 
+         c=palette_.loc[0, "ibm"], 
+         lw=1.5, 
+         ls="--", 
+         zorder=5
+    )
 
     _ax.plot(
-        dt_ + dt, 100. * e_, 
+        dt_, 100*e_, 
         lw=1.5, 
-        label="CF (forecast)" if labels_1 else None, 
+        label=r"Forecast CF $e_{\star}(t)$" if labels_1 else None, 
         c="k", 
         zorder=4
     )
 
-    _ax.axvline(
-        dt_[interval - 1] + dt, 
-        color="k", 
-        lw=0.75,
-        label="Event (update)" if labels_1 else None, 
-        zorder=6
-    )
-
     _ax.plot(
-        tau_ + dt, 100. * phi_,
+        tau_, 
+        100*phi_,
         c=palette_.loc[3, "ibm"],
         lw=3,
         label=r"$\phi_{\varepsilon_f} (\tau)$" if labels_2 else None,
@@ -647,7 +720,8 @@ def plot_forecast_parameters(
     )
     
     _ax.plot(
-        tau_ + dt, 100. * psi_[:interval],
+        tau_, 
+        100*psi_[:interval],
         c=palette_.loc[1, "ibm"],
         lw=3,
         label=r"$\phi_{\varepsilon_e} (\tau)$" if labels_2 else None,
@@ -655,49 +729,68 @@ def plot_forecast_parameters(
     )
 
     _ax.plot(
-        s_ + dt, 100. * psi_[interval:],
+        s_, 
+        100*psi_[interval:],
         c=palette_.loc[2, "ibm"],
         lw=3,
-        label=r"$\psi_{\eta} (s)$" if labels_2 else None,
+        label=r"$\phi_{\beta} (s)$" if labels_2 else None,
         zorder=2
     )
 
     _ax.plot(
-        s_ + dt, 100. * eta_,
+        s_, 
+        100*eta_,
         c=palette_.loc[4, "ibm"],
         lw=3,
-        label=r"$\sigma_{\alpha} (s)$" if labels_2 else None,
+        label=r"$\sigma_{\delta,\nu} (s)$" if labels_2 else None,
         zorder=2
     )
-
-    _ax.fill_between(
-        tau_ + dt, 100. * np.ones(tau_.shape), 100. * np.zeros(tau_.shape),
+    
+    _ax.fill_between(        
+        tau_, 
+        100*np.ones(tau_.shape), 
+        100* np.zeros(tau_.shape),
         color="lightgray",
         alpha=0.5,
         zorder=1
     )
 
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
     _ax.set_ylabel("Capacity Factor (%)", size=14)
     _ax.tick_params(axis="both", labelsize=12)
     _ax.set_ylim(0, 100)
     _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+    #_ax.set_xlim(dt_[0], dt_[-1])
 
 
 def plot_depth(
     _fig, _ax, palette_, M_, f_, f_hat_, 
     e_, w_, dx_, dt_, interval,
     range_ = [],
+    n = 120,
     colorbar = True
 ):
 
+    dt = dt_[1] - dt_[0]
+    s_ = dt_[interval:]
     tau_ = dt_[:interval]
-    s_   = dt_[interval:]
-    dt   = dt_[1] - dt_[0]
 
     idx_  = np.argsort(w_)
     _cmap = sns.color_palette("rocket", as_cmap=True)
     _norm = plt.Normalize(0., 1)
+    
+    _ax.axvline(
+        dt_[interval - 1], 
+        color = "k", 
+        linewidth = 0.75, 
+        #label = r"Forecast Update Time $\tau$",
+        zorder = 10
+    ) 
 
     _ax.plot(
         [], [], 
@@ -707,56 +800,56 @@ def plot_depth(
     )
 
     for i in range(idx_.shape[0]):
-        _ax.plot(s_ + dt, 100. * M_[idx_[i], :],
+        _ax.plot(s_, 100.*M_[idx_[i], :],
                  c = _cmap(_norm(i/idx_.shape[0])), 
-                 lw = 0.75, 
+                 lw = 0.5, 
                  zorder = 0, 
-                 clip_on = False)
+                 clip_on = True)
 
-    _ax.plot(dt_[:f_.shape[0]] + dt, 100. * f_,
+    _ax.plot(dt_[:f_.shape[0]], 100.*f_,
              c = palette_.loc[0, "ibm"],
              #label = "CF (ac)",
              zorder = 9,
              lw = 2, 
-             clip_on = False)
+             clip_on = True)
 
     _ax.plot(
-        dt_[-f_hat_.shape[0]:] + dt, 100. * f_hat_,
+        dt_[-f_hat_.shape[0]:], 100.*f_hat_,
         c = palette_.loc[0, "ibm"],
         zorder = 9,
         lw = 2,
         ls = "--", 
-        clip_on = False
+        clip_on = True
     )
 
     _ax.plot(
-        dt_ + dt, 100. * e_, 
+        dt_, 100.*e_, 
         lw = 2, 
         #label = "CF (fc)", 
         zorder = 8,
         c = "k", 
-        clip_on = False
+        clip_on = True
     )
 
-    _ax.axvline(
-        dt_[f_.shape[0] - 1] + dt, 
-        color = "k", 
-        lw = 1, 
-        #label  = "Event (update)", 
-        zorder = 10
-    )
-        
     _ax.fill_between(
-        tau_ + dt, 100 * np.ones(tau_.shape), 100 * np.zeros(tau_.shape),
+        tau_, 
+        100*np.ones(tau_.shape), 
+        100*np.zeros(tau_.shape),
         color = "lightgray",
         alpha = 0.5,
         zorder = 1
     )
+
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
     
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
     # ax_[2].set_yticks(size = 12)
-    _ax.set_ylim(0., 101)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
     _ax.set_ylabel("Capacity Factor (%)", size=14)
     
     _ax.tick_params(axis = "both", 
@@ -766,7 +859,7 @@ def plot_depth(
         cbar = _fig.colorbar(
             cm.ScalarMappable(_norm, 
                               sns.color_palette("rocket_r", as_cmap = True)),
-            cax= _ax.inset_axes([45, 80, 150, 5], transform = _ax.transData),
+            cax= _ax.inset_axes([500, 75, 150, 5], transform = _ax.transData),
             orientation = "horizontal"
         )
     
@@ -781,7 +874,8 @@ def plot_depth(
 
 def plot_enhanced_functional_boxplot(
     _fig, _ax, palette_, _upper, _lower, m_, 
-    f_, f_hat_, e_, dt_, dx_, interval,
+    f_, f_hat_, e_, dx_, dt_, interval,
+    n = 120,
     range_ = [],
     legend_1 = True, 
     legend_2 = True
@@ -791,56 +885,71 @@ def plot_enhanced_functional_boxplot(
     s_   = dt_[interval:]
     dt   = dt_[1] - dt_[0]
 
+    _ax.axvline(
+        dt_[interval - 1], 
+        color = "k", 
+        linewidth = 0.75, 
+        label = r"Forecast Update Time ($\tau$)" if legend_1 else None,
+        zorder = 10
+    )   
+
     _ax.plot(
-        dt_ + dt, 100 * e_, 
+        tau_, 
+        100*f_, 
+        c = palette_.loc[0, "ibm"], 
+        label = r"Realized CF ($f_{*}(t)$)" if legend_1 else None, 
+        zorder = 9,
+        lw = 2, 
+        clip_on = True
+    )
+
+    _ax.plot(
+        dt_, 100 * e_, 
         c = "k", 
         lw = 2, 
         zorder = 8,
-        #label = "CF (forecast)" if legend_1 else None
-        clip_on = False
+        label = r"Forecast CF ($e_{*}(t)$)" if legend_1 else None,
+        clip_on = True
     )
 
     _ax.plot(
-        tau_ + dt, 100 * f_, 
-        c = palette_.loc[0, "ibm"], 
-        #label = "CF (actual)" if legend_1 else None, 
-        zorder = 9,
-        lw = 2, 
-        clip_on = False
-    )
-
-    _ax.plot(
-        s_ + dt, 100 * f_hat_, 
+        s_, 
+        100*f_hat_, 
         c  = palette_.loc[0, "ibm"], 
         lw = 2, 
         ls = "--", 
         zorder = 9,
-        clip_on = False
+        clip_on = True
     )
-    #m_p_ = np.concatenate([f_[-1] * np.ones((1,)), m_], axis=0)
 
     _ax.plot(
-        dt_[-m_.shape[0]:] + dt, 100 * m_, 
+        dt_[-m_.shape[0]:], 
+        100*m_, 
         c = palette_.loc[2, "ibm"], 
         ls = '-',
         zorder = 4,
-        label = r"$\bar{\mu} (s)$" if legend_1 else None,
+        label = r"$\hat{\mu}_{deep} (s)$" if legend_2 else None,
         lw = 2
     )
+
     
     u_ = _upper['max']
     l_ = _lower['min']
 
     _ax.plot(
-        dt_[-u_.shape[0]:] + dt, 100 * u_, 
+        dt_[-u_.shape[0]:], 
+        100*u_, 
         c = 'k', 
+        ls = '--',
         lw = .75, 
         zorder = 7
     )
     
     _ax.plot(
-        dt_[-l_.shape[0]:] + dt, 100 * l_, 
+        dt_[-l_.shape[0]:], 
+        100*l_, 
         c = 'k', 
+        ls = '--',
         lw = .75, 
         zorder = 7, 
         label = "min-max" if legend_2 else None
@@ -852,81 +961,126 @@ def plot_enhanced_functional_boxplot(
     colors_ = ["lightgray", "darkgray", "gray"]
 
     for color, key, i in zip(
-        colors_, _upper.keys(), range(len(_upper.keys()))
+        colors_, 
+        _upper.keys(), 
+        range(len(_upper.keys()))
     ):
         u_ = _upper[key]
         l_ = _lower[key]
         cr = int((1. - float(key)) * 100)
         
         _ax.fill_between(
-            dt_[-u_.shape[0]:] + dt, 100*u_, 100*l_,
+            dt_[-u_.shape[0]:], 100*u_, 100*l_,
             color = color,
             label = f"{cr}% CR" if legend_2 else None,
             zorder = i + 1
         )
 
-    _ax.axvline(
-        dt_[interval - 1] + dt, 
-        color = "k", 
-        linewidth = 0.75, 
-        #label = "Event (update)",
-        zorder = 10
+    _ax.fill_between(
+        tau_, 
+        100*np.ones(tau_.shape), 
+        100*np.zeros(tau_.shape),
+        color = "lightgray",
+        alpha = 0.5
     )
 
-    _ax.fill_between(
-        tau_ + dt, 100*np.ones(tau_.shape), 100*np.zeros(tau_.shape),
-        color = "lightgray",
-         alpha = 0.5
-    )
-    
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+
     _ax.tick_params(axis = "both", labelsize = 12)
     
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
     # ax_[2].set_yticks(size = 12)
-    _ax.set_ylim(0., 101.)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
 def plot_density_heatmap(
     _fig, _ax, palette_, M_, f_median_, f_deepest_, 
     f_focal_, f_, f_hat_, e_, dx_, dt_, interval, 
+    n = 120,
     range_ = [0, 287],
     colorbar = True,
     legend_1 = True,
     legend_2 = True
 ):
 
+    dt = dt_[1] - dt_[0]
+    s_ = dt_[interval:]
     tau_ = dt_[:interval]
-    s_   = dt_[interval:]
-    dt   = dt_[1] - dt_[0]
-
+    print(s_.shape)
     Z_ = []
     for i in range(M_.shape[1]):
         a_, b_ = np.histogram(
-            100 * M_[:, i], 
-            bins = 25, 
+            100*M_[:, i], 
+            bins = 50, 
             range = (0, 100), 
             density = True
         )
-        
-        Z_.append(a_)
 
+        Z_.append(a_)
+        #print(i, a_.max(), a_.sum())
     Z_ = np.stack(Z_).T
     X_, Y_ = np.meshgrid(dt_[interval:], (b_[1:] + b_[:-1]) / 2.0)
-
+    
     _cmap = sns.color_palette("rocket_r", as_cmap = True)
-    _ax.pcolormesh(X_ + dt, Y_, Z_, cmap = _cmap, alpha = 1.)
+    _ax.pcolormesh(X_, Y_, Z_, 
+                   cmap = _cmap, alpha = 1., 
+                   vmin = 0., 
+                   vmax = .25)
+
+    _ax.axvline(
+        dt_[interval - 1], 
+        color = "k", 
+        linewidth = 0.75, 
+        label = r"Forecast Update Time $\tau$" if legend_1 else None,
+        zorder = 10
+    )
+    
+    _ax.plot(
+        tau_, 
+        100*f_,
+        c = palette_.loc[0, "ibm"],
+        zorder = 9,
+        lw = 2,
+        label = r"Realized CF $f_{\star}(t)$" if legend_1 else None, 
+        clip_on = True
+    )
 
     _ax.plot(
-        s_ + dt, 100 * f_median_[1:], 
+        s_, 
+        100*f_hat_, 
+        c = palette_.loc[0, "ibm"], 
+        zorder = 9,
+        lw = 2, 
+        ls = "--", 
+        clip_on = True
+    )
+
+    _ax.plot(
+        dt_, 
+        100*e_, 
+        c = "k", 
+        lw = 2, 
+        label = r"Forecast CF $e_{\star}(t)$" if legend_1 else None, 
+        zorder = 8,
+        clip_on = True
+    )
+    
+    _ax.plot(
+        s_ + dt, 
+        100*f_median_[1:], 
         c = palette_.loc[3, "ibm"], 
-        label = r"$\bar{\mu} (s)$" if legend_2 else None,
+        label = r"$\hat{\mu}_{med} (s)$" if legend_2 else None,
         lw = 2, 
         zorder = 10
     )
 
     _ax.plot(
-        s_ + dt, 100 * f_median_[1:], 
+        s_, 100*f_median_[1:], 
         c = 'k', 
         lw = .25,
         alpha = 0.5,
@@ -934,15 +1088,16 @@ def plot_density_heatmap(
     )
     
     _ax.plot(
-        s_ + dt, 100 * f_deepest_[1:], 
+        s_, 
+        100*f_deepest_[1:], 
         c = palette_.loc[2, "ibm"], 
-        label = r"$\bar{f} (s)$" if legend_2 else None,
+        label = r"$\hat{\mu}_{deep} (s)$" if legend_2 else None,
         lw = 2, 
         zorder = 10
     )
     
     _ax.plot(
-        s_ + dt, 100 * f_deepest_[1:], 
+        s_, 100*f_deepest_[1:], 
         c = 'k', 
         lw = .25, 
         alpha = 0.5,
@@ -950,78 +1105,57 @@ def plot_density_heatmap(
     )
     
     _ax.plot(
-        s_ + dt, 100 * f_focal_[1:], 
+        s_, 
+        100*f_focal_[1:], 
         c = palette_.loc[4, "ibm"], 
-        label = r"$\tilde{f} (s)$" if legend_2 else None,
+        label = r"$\hat{\mu}_{focal} (s)$" if legend_2 else None,
         lw = 2, 
         zorder = 10
     )
 
     _ax.plot(
-        s_ + dt, 100 * f_focal_[1:], 
+        s_, 
+        100*f_focal_[1:], 
         c = 'k', 
         lw = .25, 
         alpha = 0.5,
         zorder = 11
-    )
-    
-    _ax.plot(
-        tau_ + dt, 100 * f_,
-        c = palette_.loc[0, "ibm"],
-        zorder = 9,
-        lw = 2,
-        label = "CF (actual)" if legend_1 else None, 
-        clip_on = False
-    )
-
-    _ax.plot(
-        s_ + dt, 100 * f_hat_, 
-        c = palette_.loc[0, "ibm"], 
-        zorder = 9,
-        lw = 2, 
-        ls = "--", 
-        clip_on = False
-    )
-
-    _ax.plot(
-        dt_ + dt, 100 * e_, 
-        c = "k", 
-        lw = 2, 
-        label = "CF (forecast)" if legend_1 else None, 
-        zorder = 8,
-        clip_on = False
-    )
-
-    _ax.axvline(
-        dt_[interval - 1] + dt, 
-        color = "k", 
-        linewidth = 0.75, 
-        label = "Event (update)" if legend_1 else None,
-    zorder = 10
     )
 
     _ax.fill_between(
-        tau_ + dt, 100 * np.ones(tau_.shape), 100 * np.zeros(tau_.shape),
+        tau_, 
+        100*np.ones(tau_.shape), 
+        100*np.zeros(tau_.shape),
         color = "lightgray",
         alpha = 0.5
     )
-    
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation = 0)
+
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation = 0)
     _ax.set_ylabel("Capacity Factor (%)", size = 14)
 
     _ax.tick_params(axis = "both", labelsize = 12)
 
     _ax.set_ylim(0, 100)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
 
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(cmap=_cmap),
-            cax = _ax.inset_axes([50, 80, 150, 5], transform=_ax.transData),
+            cax = _ax.inset_axes([50, 75, 150, 5], transform=_ax.transData),
             orientation = "horizontal",
             extend = "max")
     
-        cbar.set_ticks([0, 1], labels = ["low", "high"], fontsize = 12)
+        cbar.set_ticks(
+            [0, 1], 
+            labels = ["low", "high"], 
+            fontsize = 12
+        )
         
         cbar.ax.tick_params(length=0)
     
@@ -1037,14 +1171,14 @@ def plot_frequency_map(
     x_tr_, 
     x_ts_, 
     x_, 
-    idx_neighbors_, 
-    idx_temporal_, 
-    idx_spatial_, 
-    sigma
+    idx_fe_, 
+    idx_dx_, 
+    sigma,
+    marker = "o",
 ):
 
     x_tr_p_, z_tr_p_ = np.unique(
-        x_tr_[idx_neighbors_, :], 
+        x_tr_[idx_fe_, :], 
         return_counts=True, 
         axis=0
     )
@@ -1065,7 +1199,7 @@ def plot_frequency_map(
         c="gray",
         alpha=1,
         ms=6,
-        marker="o",
+        marker=marker,
         mec="w",
         ls="none",
         mew=1.0,
@@ -1081,7 +1215,7 @@ def plot_frequency_map(
         alpha=0.75,
         ms=6,
         ls="none",
-        marker="o",
+        marker=marker,
         mec="w",
         mew=1.0,
         zorder=0,
@@ -1096,7 +1230,7 @@ def plot_frequency_map(
         alpha=0.75,
         ms=6,
         ls="none",
-        marker="o",
+        marker=marker,
         mec="k",
         mew=1.0,
         zorder=0,
@@ -1104,7 +1238,8 @@ def plot_frequency_map(
         label="Selected neighboring assets",
     )
 
-    for i in np.arange(x_tr_p_.shape[0], dtype=int)[np.argsort(z_tr_p_)]:
+    for i in np.arange(
+        x_tr_p_.shape[0], dtype=int)[np.argsort(z_tr_p_)]:
         if (x_tr_p_[i, 0] != x_[0]) | (x_tr_p_[i, 1] != x_[1]):
             _ax.plot(
                 x_tr_p_[i, 0],
@@ -1112,7 +1247,7 @@ def plot_frequency_map(
                 c=_cmap(_norm(z_tr_p_[i])),
                 ms=6,
                 ls="none",
-                marker="o",
+                marker=marker,
                 mec="w",
                 mew=0.75,
                 zorder=6,
@@ -1133,7 +1268,7 @@ def plot_frequency_map(
                 clip_on=False,
             )
 
-    x_tr_p_ = np.unique(x_tr_[idx_spatial_, :], axis=0)
+    x_tr_p_ = np.unique(x_tr_[idx_dx_, :], axis=0)
     for i in range(x_tr_p_.shape[0]):
         if (x_tr_p_[i, 0] != x_[0]) | (x_tr_p_[i, 1] != x_[1]):
             _ax.plot(
@@ -1141,7 +1276,7 @@ def plot_frequency_map(
                 x_tr_p_[i, 1],
                 ms=6,
                 ls="none",
-                marker="o",
+                marker=marker,
                 c="none",
                 mec="k",
                 mew=0.75,
@@ -1205,6 +1340,7 @@ def plot_dynamic_update(
     legend=False,
     colorbar=True,
     label=r"$\bar{f} (s)$",
+    n = 120,
     range_=[],
 ):
 
@@ -1222,27 +1358,26 @@ def plot_dynamic_update(
 
     _ax.plot(
         dt_,
-        100 * f_p_,
+        100*f_p_,
         c=palette_.loc[0, "ibm"],
         zorder=10,
-        label="CF (actual)" if legend else None,
+        label=r"Realized CF $f_{\star}(t)$" if legend else None,
         lw=2,
-        clip_on=False,
+        clip_on=True,
     )
 
     _ax.plot(
         dt_,
-        100 * e_,
+        100*e_,
         lw=2,
         zorder=9,
-        label="CF (forecast)" if legend else None,
+        label=r"Forecast CF $e_{\star}(t)$" if legend else None,
         c="k",
-        clip_on=False,
+        clip_on=True,
     )
 
     for i in range(len(F_curves_)):
         focal_curve_ = F_curves_[i]
-
         _ax.plot(
             dt_[-focal_curve_.shape[0] :],
             100 * focal_curve_,
@@ -1251,17 +1386,23 @@ def plot_dynamic_update(
             zorder=8,
         )
 
-    _ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
-    _ax.set_ylim(0.0, 101)
-    _ax.set_xlim(dt_[0], dt_[-1])
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+    
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
     _ax.set_ylabel("Capacity Factor (%)", size=14)
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
 
     _ax.tick_params(axis="both", labelsize=12)
 
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(_norm, _cmap),
-            cax=_ax.inset_axes([60, 80, 150, 5], transform=_ax.transData),
+            cax=_ax.inset_axes([650, 75, 150, 5], transform=_ax.transData),
             orientation="horizontal",
         )
 
@@ -1322,15 +1463,14 @@ def plot_hillshade_frequency_map(
     x_tr_,
     x_ts_,
     x_,
-    idx_neighbors_,
-    idx_temporal_,
-    idx_spatial_,
+    idx_fed_,
+    idx_x_,
     sigma,
+    marker = 'o',
 ):
     
-    idx_ = idx_temporal_
     
-    y_tr_ = x_tr_[idx_, :]
+    y_tr_ = x_tr_[idx_fed_, :]
     x_tr_p_, inv_idx_, z_tr_p_ = np.unique(
         y_tr_, 
         return_inverse=True, 
@@ -1342,7 +1482,7 @@ def plot_hillshade_frequency_map(
 
     # Step 3: expand back to full x_tr_
     z_tr_ = np.zeros(x_tr_.shape[0], dtype=int)
-    z_tr_[idx_] = z_tr_pp_
+    z_tr_[idx_fed_] = z_tr_pp_
     print(z_tr_.shape, z_tr_p_.shape, y_tr_.shape, x_tr_p_.shape)
 
     _cmap = sns.color_palette("rocket_r", as_cmap=True)
@@ -1380,7 +1520,7 @@ def plot_hillshade_frequency_map(
         c="lightgray",
         alpha=0.75,
         ms=7.5,
-        marker="o",
+        marker=marker,
         mec="w",
         ls="none",
         mew=0.75,
@@ -1396,7 +1536,7 @@ def plot_hillshade_frequency_map(
         alpha=0.75,
         ms=7.5,
         ls="none",
-        marker="o",
+        marker=marker,
         mec="w",
         mew=1.0,
         zorder=0,
@@ -1411,7 +1551,7 @@ def plot_hillshade_frequency_map(
         alpha=0.75,
         ms=7.5,
         ls="none",
-        marker="o",
+        marker=marker,
         mec="k",
         mew=1.0,
         zorder=0,
@@ -1427,7 +1567,7 @@ def plot_hillshade_frequency_map(
                 c=_cmap(_norm(z_tr_p_[i])),
                 ms=6,
                 ls="none",
-                marker="o",
+                marker=marker,
                 mec="w",
                 mew=1.0,
                 zorder=6,
@@ -1448,7 +1588,7 @@ def plot_hillshade_frequency_map(
                 clip_on=False,
             )
 
-    x_tr_p_ = np.unique(x_tr_[idx_spatial_, :], axis=0)
+    x_tr_p_ = np.unique(x_tr_[idx_x_, :], axis=0)
     for i in range(x_tr_p_.shape[0]):
         if (x_tr_p_[i, 0] != x_[0]) | (x_tr_p_[i, 1] != x_[1]):
             _ax.plot(
@@ -1456,7 +1596,7 @@ def plot_hillshade_frequency_map(
                 x_tr_p_[i, 1],
                 ms=6,
                 ls="none",
-                marker="o",
+                marker=marker,
                 c="none",
                 mec="k",
                 mew=1.0,
@@ -1592,14 +1732,27 @@ def globe_inset(_fig, _ax, _TX, x0, y0, width, height):
     _ax_inset.set_global()
 
 
-def plot_density_threshold(_fig, _ax, palette_, d_f_, d_e_, w_f_, w_e_, xi):
+def plot_density_threshold(
+    _fig, 
+    _ax, 
+    palette_, 
+    d_f_, 
+    d_e_, 
+    w_f_, 
+    w_e_, 
+    xi,
+    label1,
+    label2,
+    ylabel = r"$\omega^{f,e}$",
+    xlabel = r"$r_{f,e}$",
+):
 
     _ax.plot(
         d_f_[np.argsort(d_f_)],
         w_f_[np.argsort(d_f_)],
         c=palette_.loc[2, "ibm"],
         lw=3,
-        label="f",
+        label=label1,
         clip_on=False,
     )
 
@@ -1608,7 +1761,7 @@ def plot_density_threshold(_fig, _ax, palette_, d_f_, d_e_, w_f_, w_e_, xi):
         w_e_[np.argsort(d_e_)],
         c=palette_.loc[4, "ibm"],
         lw=3,
-        label="e",
+        label=label2,
         clip_on=False,
     )
 
@@ -1621,8 +1774,8 @@ def plot_density_threshold(_fig, _ax, palette_, d_f_, d_e_, w_f_, w_e_, xi):
         zorder=10
     )
 
-    _ax.set_ylabel(r"$\omega^{f,e}$", size=12)
-    _ax.set_xlabel(r"$r_{f,e}$", size=12)
+    _ax.set_ylabel(ylabel, size=12)
+    _ax.set_xlabel(xlabel, size=12)
 
     _ax.tick_params(axis="both", labelsize=12)
 
@@ -1641,7 +1794,9 @@ def plot_functional_neighborhood(
     idx_neighbors_, 
     w_f_, 
     w_e_, 
-    xi
+    xi,
+    ylabel = r"$\omega^{e}$",
+    xlabel = r"$\omega^{f}$",
 ):
 
     _ax.scatter(
@@ -1662,41 +1817,54 @@ def plot_functional_neighborhood(
         clip_on=False,
     )
 
-    _ax.axhline(xi, ls="--", color="k", lw=1.0, label=r"$\xi$", zorder=10)
+    _ax.axhline(
+        xi, 
+        ls="--", 
+        color="k", 
+        lw=1.0, 
+        label=r"$\xi$", 
+        zorder=10
+    )
 
-    _ax.axvline(xi, ls="--", color="k", lw=1.0, label=r"$\xi$", zorder=10)
+    _ax.axvline(
+        xi, 
+        ls="--", 
+        color="k", 
+        lw=1.0, 
+        label=r"$\xi$", 
+        zorder=10
+    )
 
-    _ax.set_ylabel(r"$\omega^{e}$", size=12)
-    _ax.set_xlabel(r"$\omega^{f}$", size=12)
-
+    _ax.set_ylabel(ylabel, size=12)
+    _ax.set_xlabel(xlabel, size=12)
     _ax.tick_params(axis="both", labelsize=12)
-
     _ax.set_ylim(0, 1)
     _ax.set_xlim(0, 1)
 
-    _ax_top.hist(w_f_, bins=25, range=(0, 1), color="gray", density=True)
+    _ax_top.hist(
+        w_f_, 
+        bins=25, 
+        #range=(0, 1), 
+        color="gray", 
+        density=True
+    )
 
     _ax_top.tick_params(axis="both", labelsize=12)
-
     _ax_top.set_xlim(0, 1)
 
     _ax_left.hist(
         w_e_,
         bins=25,
-        range=(0, 1),
+        #range=(0, 1),
         color="gray",
         density=True,
         orientation="horizontal",
     )
 
     _ax_left.set_ylim(0, 1)
-
     _ax_left.tick_params(axis="both", labelsize=12)
-
     _ax.tick_params(axis="y", labelleft=False)
-
     _ax_top.tick_params(axis="x", labelbottom=False)
-
     _ax_left.tick_params(axis="y", labelleft=False)
 
 
@@ -1704,13 +1872,13 @@ def plot_selected_functional_neighbors(
     _fig, 
     _ax, 
     palette_, 
-    idx_neighbors_, 
-    idx_temporal_, 
-    idx_spatial_, 
+    idx_fe_, 
+    idx_dx_, 
     w_f_, 
     w_e_, 
-    w_, 
-    xi
+    xi,
+    ylabel = r"$\omega^{e}$",
+    xlabel = r"$\omega^{f}$",
 ):
 
     _ax.scatter(
@@ -1721,46 +1889,45 @@ def plot_selected_functional_neighbors(
         alpha=1.0,
         lw=0.25,
         ec="k",
-        label="Scenario",
+        label="Functional Scenario",
         clip_on=True,
     )
 
     _ax.scatter(
-        w_f_[idx_neighbors_],
-        w_e_[idx_neighbors_],
+        w_f_[idx_fe_],
+        w_e_[idx_fe_],
         c=palette_.loc[0, "ibm"],
         s=10,
         alpha=1.0,
         lw=0.25,
         ec="k",
-        label="Neighbor",
+        label="Functional Neighbor",
         clip_on=False,
     )
 
     _ax.scatter(
-        w_f_[idx_spatial_],
-        w_e_[idx_spatial_],
+        w_f_[idx_fe_][idx_dx_],
+        w_e_[idx_fe_][idx_dx_],
         c=palette_.loc[3, "ibm"],
         s=10,
         lw=0.25,
         ec="k",
         alpha=1.0,
-        label="Selected neighbor",
+        label="Spatiotemporal Neighbor",
         clip_on=False,
     )
 
     _ax.axline((1, 1), slope=1, lw=1, c="k")
 
-    _ax.set_ylabel(r"$\omega^{e}$", size=12)
-    _ax.set_xlabel(r"$\omega^{f}$", size=12)
+    _ax.set_ylabel(ylabel, size=12)
+    _ax.set_xlabel(xlabel, size=12)
 
     _ax.tick_params(axis="both", labelsize=12)
 
-    _ax.set_xlim(xi, 1)
-    _ax.set_ylim(xi, 1)
+    _ax.set_xlim(xi - xi*0.05, )
+    _ax.set_ylim(xi - xi*0.05, )
 
     _ax.axhline(xi, ls="--", color="k", lw=1.0, zorder=10)
-
     _ax.axvline(xi, ls="--", color="k", lw=1.0, zorder=10)
 
 
@@ -1771,95 +1938,119 @@ def _check_limit(x):
         x = x + 365
     return x
 
-
 def plot_filtered_scenarios(
     fig,
     _ax,
     palette_,
-    idx_neighbors_,
-    idx_temporal_,
-    idx_spatial_,
-    d_h_,
+    idx_fed_,
+    idx_x_,
+    idx_x_local_, 
+    d_x_,
     t_tr_,
     t_ts,
-    sigma,
-    gamma,
-    gamma_prime,
+    r,
 ):
-
+    
     _ax.scatter(
-        t_tr_[idx_neighbors_],
-        d_h_[idx_neighbors_],
+        t_tr_[idx_fed_],
+        d_x_,
         s=75,
         c="darkgray",
         lw=0.5,
         edgecolor="w",
         clip_on=False,
         zorder=4,
-        label="Neighbors",
+        label="Functional neighbor",
     )
 
     _ax.scatter(
-        t_tr_[idx_temporal_],
-        d_h_[idx_temporal_],
+        t_tr_[idx_x_],
+        d_x_[idx_x_local_],
         s=75,
         c=palette_.loc[3, "ibm"],
         lw=0.5,
         edgecolor="w",
         clip_on=False,
         zorder=5,
-        label="Temporal Neighbors",
+        label="Geographical neighbor",
     )
 
-    _ax.scatter(
-        t_tr_[idx_spatial_],
-        d_h_[idx_spatial_],
-        s=75,
-        c=palette_.loc[3, "ibm"],
-        lw=0.5,
-        edgecolor="k",
-        clip_on=False,
-        zorder=5,
-        label="Spatial Neighbors",
-    )
+    # _ax.scatter(
+    #     t_tr_[idx_spatial_],
+    #     d_h_[idx_spatial_],
+    #     s=75,
+    #     c=palette_.loc[3, "ibm"],
+    #     lw=0.5,
+    #     edgecolor="k",
+    #     clip_on=False,
+    #     zorder=5,
+    #     label="Spatial Neighbors",
+    # )
 
     _ax.axvline(
         t_ts, 
         color=palette_.loc[0, "ibm"], 
         ls="--", 
-        lw=4, 
-        zorder=6
+        lw=2.5, 
+        zorder=6,
+        label=f"Day-of-year $d_\star$"
     )
 
-    if gamma_prime != 0:
-        _ax.axvline(
-            _check_limit(t_ts + gamma), 
+    # if gamma_prime != 0:
+    #     _ax.axvline(
+    #         _check_limit(t_ts + gamma + 1), 
+    #         c="k", 
+    #         ls="--", 
+    #         lw=1.5, 
+    #         zorder=10
+    #     )
+
+    #     _ax.axvline(
+    #         _check_limit(t_ts - gamma + 1),
+    #         c="k",
+    #         ls="--",
+    #         lw=1.5,
+    #         zorder=10,
+    #         label="Thresholds",
+    #     )
+        # if period == 1:
+        #     _ax.axvline(
+        #         _check_limit(t_ts + gamma + 186), 
+        #         c="k", 
+        #         ls="--", 
+        #         lw=1.5, 
+        #         zorder=10
+        #     )
+    
+        #     _ax.axvline(
+        #         _check_limit(t_ts - gamma + 186),
+        #         c="k",
+        #         ls="--",
+        #         lw=1.5,
+        #         zorder=10,
+        #         label="Thresholds",
+            # )
+    if r != 0:
+        _ax.axhline(
+            r, 
             c="k", 
             ls="--", 
-            lw=1.5, 
-            zorder=10
-        )
-
-        _ax.axvline(
-            _check_limit(t_ts - gamma),
-            c="k",
-            ls="--",
-            lw=1.5,
+            lw=1.25, 
             zorder=10,
-            label="Thresholds",
+            label='Distance threshold',
         )
-
-    if sigma != 0:
-        _ax.axhline(sigma, c="k", ls="--", lw=1.5, zorder=10)
 
     # _ax.set_ylabel(r"$|| \mathbf{x}_\star - \mathbf{x}_n ||_\mathrm{H}$", size=14)
     # _ax.set_xlabel(r"$|| d_\star - d_n ||_\mathrm{p}$", size=16)
     # _ax.set_xlabel(r"Year Day", size=16)
     _ax.set_ylabel(r"Distance (km)", size=18)
     _ax.set_xlim(1, 365)
-    _ax.set_ylim(0, d_h_.max())
+    _ax.set_ylim(0, d_x_.max())
     _ax.set_xticks([], [])
 
+    _ax.yaxis.set_major_formatter(
+    FuncFormatter(lambda x, pos: f"{x:,.0f}")
+)
     _ax.tick_params(axis="both", labelsize=16)
 
     _ax.set_xlim(1, 365)
@@ -1870,18 +2061,15 @@ def plot_dates_histogram(
     _fig,
     _ax,
     palette_,
-    idx_neighbors_,
-    idx_temporal_,
-    idx_spatial_,
-    d_h_,
+    idx_fed_,
+    idx_x_,
+    d_x_,
     t_tr_,
     t_ts,
-    gamma,
-    gamma_prime,
 ):
 
     _ax.hist(
-        t_tr_[idx_neighbors_],
+        t_tr_[idx_fed_],
         bins=50,
         range=(1, 365),
         color="darkgray",
@@ -1890,7 +2078,7 @@ def plot_dates_histogram(
     )
 
     _ax.hist(
-        t_tr_[idx_temporal_],
+        t_tr_[idx_fed_][idx_x_],
         bins=50,
         range=(1, 365),
         alpha=0.5,
@@ -1899,59 +2087,66 @@ def plot_dates_histogram(
         lw=0.5,
     )
 
-    _ax.hist(
-        t_tr_[idx_spatial_],
-        bins=50,
-        range=(0, 365),
-        alpha=0.5,
-        color=palette_.loc[3, "ibm"],
-        edgecolor="k",
-        lw=0.5,
+    _ax.axvline(
+        t_ts, 
+        color=palette_.loc[0, "ibm"], 
+        ls="--", 
+        lw=2.5, 
+        zorder=6
     )
 
-    if gamma_prime != 0:
-        _ax.axvline(
-            _check_limit(t_ts - gamma), 
-            c="k", 
-            ls="--", 
-            lw=1.5, 
-            zorder=2, 
-            label="d: day"
-        )
+    # _ax.hist(
+    #     t_tr_[idx_spatial_],
+    #     bins=50,
+    #     range=(0, 365),
+    #     alpha=0.5,
+    #     color=palette_.loc[3, "ibm"],
+    #     edgecolor="k",
+    #     lw=0.5,
+    # )
 
-        _ax.axvline(
-            _check_limit(t_ts + gamma), 
-            c="k", 
-            ls="--", 
-            lw=1.5, 
-            zorder=2, 
-            label="d: day"
-        )
+    # if gamma_prime != 0:
+    #     _ax.axvline(
+    #         _check_limit(t_ts - gamma), 
+    #         c="k", 
+    #         ls="--", 
+    #         lw=1.5, 
+    #         zorder=2, 
+    #         label="d: day"
+    #     )
+
+    #     _ax.axvline(
+    #         _check_limit(t_ts + gamma), 
+    #         c="k", 
+    #         ls="--", 
+    #         lw=1.5, 
+    #         zorder=2, 
+    #         label="d: day"
+    #     )
 
     _ax.set_xlabel(r"Year Day", size=18)
     _ax.set_ylabel(r"Neighbors", size=18)
     _ax.set_xlim(1, 365)
     _ax.tick_params(axis="both", labelsize=16)
     # _ax.set_xticks([], [])
-
+    _ax.yaxis.set_major_formatter(
+    FuncFormatter(lambda x, pos: f"{x:,.0f}")
+)
 
 def plot_distance_histogram(
     _fig, 
     _ax, 
     palette_, 
-    idx_neighbors_, 
-    idx_temporal_, 
-    idx_spatial_, 
-    d_h_, 
-    sigma
+    idx_fed_, 
+    idx_x_local_, 
+    d_x_, 
+    r,
 ):
 
-    d_max = d_h_.max()
-
     _ax.hist(
-        d_h_[idx_neighbors_],
+        d_x_,
         bins=50,
-        range=(0, d_max),
+        range=(0, d_x_.max()),
         color="darkgray",
         edgecolor="w",
         lw=0.5,
@@ -1959,9 +2154,9 @@ def plot_distance_histogram(
     )
 
     _ax.hist(
-        d_h_[idx_temporal_],
+        d_x_[idx_x_local_],
         bins=50,
-        range=(0, d_h_.max()),
+        range=(0, d_x_.max()),
         alpha=0.5,
         color=palette_.loc[3, "ibm"],
         edgecolor="w",
@@ -1969,43 +2164,56 @@ def plot_distance_histogram(
         orientation="horizontal",
     )
 
-    _ax.hist(
-        d_h_[idx_spatial_],
-        bins=50,
-        range=(0, d_h_.max()),
-        alpha=0.5,
-        color=palette_.loc[3, "ibm"],
-        edgecolor="k",
-        lw=1,
-        orientation="horizontal",
-    )
+    # _ax.hist(
+    #     d_h_[idx_spatial_],
+    #     bins=50,
+    #     range=(0, d_h_.max()),
+    #     alpha=0.5,
+    #     color=palette_.loc[3, "ibm"],
+    #     edgecolor="k",
+    #     lw=1,
+    #     orientation="horizontal",
+    # )
 
-    if sigma != 0:
+    # if sigma != 0:
+    #     _ax.axhline(
+    #         sigma, 
+    #         c="k", 
+    #         ls="--", 
+    #         lw=1.5, 
+    #         zorder=10
+    #     )
+
+
+    if r != 0:
         _ax.axhline(
-            sigma, 
+            r, 
             c="k", 
             ls="--", 
-            lw=1.5, 
-            zorder=10
+            lw=1.25, 
+            zorder=10,
         )
 
     _ax.xaxis.set_label_position("top")
     _ax.xaxis.tick_top()
     # _ax.set_xlabel(r"Distance (km)", size=16)
     _ax.set_xlabel(r"Neighbors", size=18)
-    _ax.set_ylim(0, d_max)
+    _ax.set_ylim(0, d_x_.max())
     _ax.tick_params(axis="both", labelsize=16, rotation=270)
     _ax.set_yticks([], [])
     _ax.invert_yaxis()
-    # _ax.legend(frameon=False, ncol=1, fontsize = 12)
-
+    _ax.xaxis.set_major_formatter(
+    FuncFormatter(lambda x, pos: f"{x:,.0f}")
+)
+    
 def selected_scenarios_heatmap(
     _fig, 
     _ax, 
     palette_,
     _haversine_dist, 
-    idx_, 
-    d_h_, 
+    idx_fed_, 
+    idx_x_local_, 
+    d_x_, 
     x_, 
     t_tr_, 
     x_ts_, 
@@ -2032,9 +2240,11 @@ def selected_scenarios_heatmap(
     )
 
     K = 0
+    print(d_x_.shape, m_tr_.shape, idx_fed_.shape, idx_x_local_.shape)
     heatmap_ = np.zeros((N + 1, m_tr_.max() + 1))
-    for d_h, m in zip(d_h_[idx_], m_tr_[idx_]):
-        heatmap_[np.searchsorted(intervals_, d_h), m] += 1
+    #for d_x, m in zip(d_x_[idx_x_local_], m_tr_[idx_fed_][idx_x_local_]):
+    for d_x, m in zip(d_x_, m_tr_[idx_fed_]):
+        heatmap_[np.searchsorted(intervals_, d_x), m] += 1
         K += 1
 
     h_max = int(heatmap_.max())
@@ -2112,24 +2322,24 @@ def scenarios_frequency_dates(
     _fig,
     _ax,
     palette_,
-    idx_neighbors_,
-    idx_temporal_,
-    idx_spatial_,
+    idx_fe_,
+    idx_dx_,
     t_tr_,
     t_ts,
     scale=2.5,
     colorbar=True,
 ):
-
-    _date = datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S")
+    _date = pd.to_datetime(t_ts)
+    #_date = datetime.datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S")
     m_a = _date.timetuple().tm_mon - 1
     day = _date.timetuple().tm_mday - 1
     _, n_days = calendar.monthrange(_date.year, m_a + 1)
+    m_tr_ = pd.to_datetime(t_tr_).month.values - 1
 
-    m_tr_ = np.stack(
-        [datetime.datetime.strptime(t_tr_[i], "%Y-%m-%d %H:%M:%S").timetuple().tm_mon - 1 
-         for i in range(t_tr_.shape[0])]
-    )
+    # m_tr_ = np.stack(
+    #     [datetime.datetime.strptime(t_tr_[i], "%Y-%m-%d %H:%M:%S").timetuple().tm_mon - 1 
+    #      for i in range(t_tr_.shape[0])]
+    # )
 
     month_name_ = [
         "Jan",
@@ -2146,13 +2356,19 @@ def scenarios_frequency_dates(
         "Dec",
     ]
 
-    months_, counts_ = np.unique(m_tr_[idx_neighbors_], return_counts=True)
+    months_, counts_ = np.unique(
+        m_tr_[idx_fe_], 
+        return_counts=True
+    )
 
     counts_1_ = np.zeros(12)
     for month, count in zip(months_, counts_):
         counts_1_[month] = count
 
-    months_, counts_ = np.unique(m_tr_[idx_temporal_], return_counts=True)
+    months_, counts_ = np.unique(
+        m_tr_[idx_dx_], 
+        return_counts=True
+    )
 
     counts_2_ = np.zeros(12)
     for month, count in zip(months_, counts_):
@@ -2188,26 +2404,149 @@ def scenarios_frequency_dates(
 
     _ax.set_xticks(x_, [] * len(x_))
 
-    _ax.set_yticks(np.arange(len(month_name_), dtype=int), month_name_, size=14)
+    _ax.set_yticks(
+        np.arange(len(month_name_), dtype=int),
+        month_name_, 
+        size=14
+    )
 
     _ax.tick_params(axis="y", length=0)
     _ax.tick_params(axis="x", length=0)
 
     _ax.axhline(
-        m_a + day / n_days, color=palette_.loc[0, "ibm"], ls="--", lw=2.5, zorder=6
+        m_a + day/n_days, 
+        color=palette_.loc[0, "ibm"], 
+        ls="--", 
+        lw=2.5, 
+        zorder=6
     )
 
     cbar = _fig.colorbar(
         cm.ScalarMappable(cmap=_cmap),
-        cax=_ax.inset_axes([7.5, 4, 2, 3.25], transform=_ax.transData),
+        cax=_ax.inset_axes([5, 4, 1, 3.5], transform=_ax.transData),
     )
 
-    cbar.set_ticks([0, 1], labels=[1, int(counts_2_.max())], fontsize=12)
+    cbar.set_ticks([0, 1], labels=[1, f"{counts_2_.max():,.0f}"], fontsize=12)
 
     cbar.ax.set_title("Neighbors", rotation=0, fontsize=12)
     _ax.set_xlim(-4, 4)
 
     sns.despine(left=True, bottom=True)
 
+def _clean_fmt(x, pos):
+    if abs(x - round(x)) < 1e-9:
+        return str(int(round(x)))
+    return f"{x:.2g}"
 
 
+def plot_pit(_fig, _ax, u_, 
+              bins=10,
+              v=0.5,
+              xlabel = 'PIT'):
+    
+    vmin= -v
+    vmax= v
+    KS_stat = KS(u_)
+
+    u_ = np.sort(u_)
+    n = len(u_)
+
+    # --- Histogram ---
+    counts_, bins_, patches = _ax.hist(
+        u_,
+        bins=bins,
+        range=(0.0, 1.0),
+        density=True,
+        lw=0.5,
+        edgecolor='k',
+        alpha=1
+    )
+
+    # deviation from perfect calibration
+    deviation = counts_ - 1.
+    print(deviation.min(), deviation.max())
+
+    # # --- Compute KS deviation at bin centers ---
+    # bin_centers = 0.5 * (bins_[:-1] + bins_[1:])
+
+    # # empirical CDF evaluated at bin centers
+    # ecdf_interp = np.searchsorted(u_, bin_centers, side='right') / n
+
+    # deviation = ecdf_interp - bin_centers  # signed deviation
+    print(deviation)
+    # # --- Colormap centered at 0 ---
+    # max_dev = np.max(np.abs(ks_deviation))
+    # print(max_dev)
+    # normalize deviations for colormap
+    # norm = mcolors.Normalize(vmin=vmin, 
+    #                          vcenter=0,
+    #                          vmax=vmax)
+    # norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+    # cmap = cm.get_cmap("coolwarm")
+
+    for patch, dev in zip(patches, deviation):
+        #patch.set_facecolor(cmap(norm(dev)))
+        patch.set_facecolor('lightgray')
+
+    # --- Reference line ---
+    _ax.axhline(1.0, 
+                c = 'k',
+                linestyle='--')
+
+    _ax.set_xlim(0, 1)
+    _ax.set_ylim(0, 3)
+
+    #_ax.set_xlabel("u = F̂(y_obs)")
+    _ax.set_xlabel(xlabel, size=14)
+    _ax.set_ylabel("Density", size=14)
+
+    _ax.xaxis.set_major_formatter(FuncFormatter(_clean_fmt))
+
+    _ax.tick_params(axis="both", labelsize=12)
+
+    # --- Annotate KS statistic ---
+    _ax.text(0.25, 0.95,
+             f"$D_{{KS}}$ = {KS_stat:.3f}",
+             transform=_ax.transAxes,
+             verticalalignment='top')
+
+def plot_zone_neighborhood(fig, ax, palette_, X_, regions_, idx_, region):
+    
+    # Data
+    y_ = np.array(regions_)
+    x_ = np.zeros((len(y_),))
+
+    colors_ = [palette_['ibm'].iloc[i] for i in range(len(y_))]
+    lws_ = np.zeros((len(y_),))
+    lws_[y_ == region] = 1
+
+    for edge in np.unique(X_[idx_, 0].astype(int)):
+        x_[edge] = (X_[idx_, 0] == edge).sum()
+
+    #x_ = 100*x_/x_.sum()
+    
+    ax.bar(
+        y_, x_, 
+        color = colors_, 
+        ec = 'k', 
+        lw = lws_)
+    
+    # --- Style: keep only bottom axis ---
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    
+    # Remove y-axis ticks (optional, for cleaner look)
+    ax.yaxis.set_ticks_position('none')
+    # Keep only bottom ticks
+    ax.xaxis.set_ticks_position('bottom')
+    
+    # --- Horizontal auxiliary lines ---
+    ax.yaxis.grid(True,linewidth=0.7, alpha=0.7)
+    ax.set_axisbelow(True)  # grid behind bars
+    # Optional: light y ticks without spine
+    ax.tick_params(axis='y', length=0, labelsize=10)
+    ax.tick_params(axis='x', labelsize=10)
+
+    ax.set_ylabel("Neighborhood (%)", fontsize = 12)
+    #ax.set_ylim(0, 100)

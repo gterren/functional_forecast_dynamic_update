@@ -2,12 +2,6 @@ import pandas as pd
 import numpy as np
 import scipy.stats as stats
 
-
-#from scipy.integrate import quad
-#from scipy import interpolate
-#from scipy.stats import multivariate_normal, norm
-#from scipy.interpolate import make_smoothing_spline
-
 # Interpolate model hyperparameters across intervals
 def get_hyper(hyper_, param, time):
     x_ = hyper_.loc[param].to_numpy()
@@ -15,13 +9,16 @@ def get_hyper(hyper_, param, time):
     return np.interp(time, time_, x_)
 
 # Interpolate samples in bands
-def get_band_fraction(df_, alpha_, dist, interval):
+def get_band_fraction(df_, alpha_, interval, distance, score):
     k_ = []
     for alpha in alpha_:
-        idx_ = (df_['alpha'] == alpha) & (df_['distance'] == dist)
+        idx_ = ((df_['alpha'] == alpha) 
+                & (df_['distance'] == distance)
+                & (df_['score'] == score))
+   
         x_ = df_.loc[idx_, 'fraction'].to_numpy()
-        interval_ = df_.loc[idx_].index.to_numpy()
-        k_.append(np.interp(interval, interval_, x_))
+        y_ = df_.loc[idx_].index.to_numpy()
+        k_.append(np.interp(interval, y_, x_))
     return np.array(k_)
 
 # Kolmogorov–Smirnov (KS) score

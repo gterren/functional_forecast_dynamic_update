@@ -61,13 +61,11 @@ class functional_dynamic_update:
     # Calculate weighted (w_) distance between X_ and x_
     def _weighted_euclidian_dist(self, X_, x_, 
                                  w_ = [],
-                                 normalize = True):
+                                 normalize = False):
         if len(w_) == 0:
             w_ = np.ones(x_.shape)/x_.shape[0]
-        # Normalize weights
         if normalize:
             w_ = w_ / w_.sum()
-        # Calculate weighted Ecludian distance
         d_ = np.zeros((X_.shape[0],))
         for i in range(X_.shape[0]):
             d_[i] = w_.T @ (X_[i, :] - x_) ** 2
@@ -369,7 +367,8 @@ class functional_dynamic_update:
         kappa_0 = 400,
         kappa = 100,
         p_fusion = 1.,
-        normalize_distance = True,
+        normalize_euclidian = False,
+        normalize_similarity = False,
     ):
 
         # Partially observed curve
@@ -462,14 +461,26 @@ class functional_dynamic_update:
             self.F_[:, :self.interval], 
             self.f_, 
             w_ = self.phi_,
-            normalize=normalize_distance,
+            normalize = normalize_euclidian,
         )
         
         self.d_e_ = self._weighted_euclidian_dist(
             self.E_, 
             self.e_, 
             w_ = self.psi_,
-            normalize=normalize_distance,
+            normalize = normalize_euclidian,
+        )
+
+        # w: partially observed curve similarity
+        self.w_f_ = self._rbf_kernel(
+            self.d_f_, 
+            self.length_scale_f
+        )
+
+        # w: DA forecast similarity
+        self.w_e_ = self._rbf_kernel(
+            self.d_e_, 
+            self.length_scale_e
         )
         
        # d: Temporal distance between samples
@@ -485,65 +496,24 @@ class functional_dynamic_update:
             
             self.d_d_ = None
 
-        # w: partially observed curve similarity
-        self.w_f_ = self._rbf_kernel(
-            self.d_f_, 
-            self.length_scale_f
-        )
-
-        # w: DA forecast similarity
-        self.w_e_ = self._rbf_kernel(
-            self.d_e_, 
-            self.length_scale_e
-        )
-
         # w: Temporal similarity
         self.w_d_ = self._rbf_kernel(
             self.d_d_, 
             self.length_scale_d
         )
 
-        # # Functional Neighborhood
-        # self.w_fed_ = np.min(
-        #     np.stack([self.w_f_, self.w_e_, self.w_d_]), axis = 0
-        # )
+        if normalize_similarity:
+            self.w_f_ /= self.w_f_.sum()
+            self.w_e_ /= self.w_e_.sum()
+            self.w_d_ /= self.w_d_.sum()
+            
+        # Functional Neighborhood
+        self.w_fed_ = np.min(
+            np.stack([self.w_f_, self.w_e_, self.w_d_]), axis = 0
+        )
 
-        # # Rescale so nearest neighbor = 1 (prevents underflow at large
-        # # length scales from deciding the ranking). Guard against total
-        # # underflow: if all weights are 0, raise instead of producing NaNs
-        # # (caught by the try/except in _run_ffc as a failed process).
-        # w_max = self.w_fed_.max()
-        # if w_max > 0.:
-        #     self.w_fed_ /= w_max
-        # else:
-        #     raise FloatingPointError(
-        #         "w_fed_ underflowed to zero for all candidates "
-        #         "(length scales too large for the distance ranges)"
-        #     )
-
-        # self.idx_fed_ = np.argsort(self.w_fed_)[::-1][:self.kappa_0]
+        self.idx_fed_ = np.argsort(self.w_fed_)[::-1][:self.kappa_0]
         
-        # Functional Neighborhood — log-weights (identical to min-of-RBF formulation,
-        # but immune to underflow at large length scales)
-        self.log_w_fed_ = -np.max(
-            np.stack([
-                self.length_scale_f * self.d_f_,
-                self.length_scale_e * self.d_e_,
-                self.length_scale_d * self.d_d_,
-            ]), axis = 0
-        )
-        self.arg_fed_ = np.argmax(
-            np.stack([
-                self.length_scale_f * self.d_f_,
-                self.length_scale_e * self.d_e_,
-                self.length_scale_d * self.d_d_,
-            ]), axis = 0
-        )
-
-        # linear-scale weights, rescaled so nearest neighbor = 1 (for inspection/xi)
-        self.w_fed_ = np.exp(self.log_w_fed_ - self.log_w_fed_.max())
-        self.idx_fed_ = np.argsort(self.log_w_fed_)[::-1][:self.kappa_0]
-
         # spatial: Euclidean spatial distance between samples
         if self._distances['spatial'] == 'euclidean':
             
@@ -577,41 +547,15 @@ class functional_dynamic_update:
         #     np.stack([self.w_d_, self.w_x_]), axis = 0
         # )
 
-        # # Spatially nearest kappa candidates; exact ties in d_x_
-        # # (curves from the same asset share one location) are broken
-        # # by functional similarity, most similar first.
-        # self.idx_x_local_ = np.lexsort(
-        #     (-self.w_fed_[self.idx_fed_], self.d_x_)
-        # )[:self.kappa]
+        # self.idx_x_local_ = np.argsort(self.d_x_)[::-1][:self.kappa]
+        self.idx_x_local_ = np.argsort(self.d_x_)[:self.kappa]
 
-        # self.idx_x_ = self.idx_fed_[self.idx_x_local_]
-        
-        # # Normalized the weight of each neighboring curve 
-        # self.w_prime_  = self.w_fed_[self.idx_x_]
-        # self.w_prime_ /= self.w_fed_[self.idx_x_].sum()
-        # #self.w_prime_prime = self.w_[self.idx_spatial_]
-
-        # self.xi = self.w_fed_[self.idx_fed_].min()
-        # self.r = self.d_x_[self.idx_x_local_].max()
-        # self.t_max = self.t_[self.idx_fed_].max()
-        # self.t_min = self.t_[self.idx_fed_].min()
-
-        self.idx_x_local_ = np.lexsort(
-            (-self.log_w_fed_[self.idx_fed_], self.d_x_)
-        )[:self.kappa]
-
-        # map local positions (within idx_fed_) back to global sample indices
         self.idx_x_ = self.idx_fed_[self.idx_x_local_]
 
-        lw_ = self.log_w_fed_[self.idx_x_]
-        self.w_prime_  = np.exp(lw_ - lw_.max())
-        self.w_prime_ /= self.w_prime_.sum()
-
-
-        self.xi = self.log_w_fed_[self.idx_fed_].min() - self.log_w_fed_.max()   # log relative similarity, 0 = best
+        self.xi = self.w_fed_[self.idx_fed_].min()
         self.r = self.d_x_[self.idx_x_local_].max()
         self.t_max = self.t_[self.idx_fed_].max()
-        self.d_max = self.d_d_[self.idx_fed_].max()
+        self.t_min = self.t_[self.idx_fed_].min()
 
         # Fuse neighboring curves with DA forecasts
         self.M_, self.m_0_ = self._fuse_curves(
@@ -626,6 +570,11 @@ class functional_dynamic_update:
             self.kappa, 
             self.p_fusion
         )
+        
+        # Normalized the weight of each neighboring curve 
+        self.w_prime_  = self.w_fed_[self.idx_x_]
+        self.w_prime_ /= self.w_fed_[self.idx_x_].sum()
+        #self.w_prime_prime = self.w_[self.idx_spatial_]
 
         # Neighborhood focal curve
         self.f_focal_ = self._focal_curve(
@@ -1077,9 +1026,8 @@ class functional_dynamic_update:
         _KDS = []
         weights /= weights.sum()
         for i in range(M_.shape[1]):
-            h = self._weighted_silverman_bandwidth(M_[:, i], weights)
             _KD = KernelDensity(
-                bandwidth = h + 0.01, 
+                bandwidth = self._weighted_silverman_bandwidth(M_[:, i], weights), 
                 algorithm = algorithm, 
                 kernel = kernel
             ).fit(M_[:, i][:, np.newaxis], weights[:, np.newaxis])
