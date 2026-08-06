@@ -2,6 +2,8 @@ import os, datetime, sys, optuna
 
 sys.path.append('/home/gterren/dynamic_update/functional_forecast_dynamic_update/')
 
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import pickle as pkl
@@ -20,20 +22,20 @@ from optuna.importance import (get_param_importances,
                                MeanDecreaseImpurityImportanceEvaluator,
                                PedAnovaImportanceEvaluator)
 
+from src import loader
 from src.fdu import functional_dynamic_update
-
-from src.utils import (_KS, 
+from src.utils import (_KS,
                        _bias_corrected_forecast,
-                       _weighted_interval_score, 
+                       _weighted_interval_score,
                        _simultaneous_coverage,
                        _coverage_score,
                        _interval_score,
-                       _empirical_PIT, 
+                       _empirical_PIT,
                        _energy_score)
 
-path_to_validation = '/home/gterren/dynamic_update/validation'
-path_to_param = '/home/gterren/dynamic_update/params'
-path_to_data = '/home/gterren/dynamic_update/data'
+VALIDATION = Path('/home/gterren/dynamic_update/validation')
+PARAM = Path('/home/gterren/dynamic_update/params')
+DATA = Path('/home/gterren/dynamic_update/data')
 
 # load or create DataFrame
 def _read_csv_safe(path):
@@ -48,7 +50,12 @@ def _read_csv_safe(path):
         return pd.DataFrame()
 
 # Run FFC experiments for a given process and set of parameters, and compute PIT values and scoring rules.
-def _run_ffc(process_, _data, _params, time):
+def _run_ffc(
+        process_,
+        _data,
+        _bo_params,
+        time
+):
 
     asset, day = process_
 
@@ -61,7 +68,7 @@ def _run_ffc(process_, _data, _params, time):
     E_tr_lin_, E_ts_lin_ = _data['day-ahead_linear_fc']
     E_tr_, E_ts_ = _data['day-ahead_fc']
     t_tr_, t_ts_ = _data['dates']
-    X_tr_, X_ts_ = _data['locations'] 
+    X_tr_, X_ts_ = _data['locations']
     dt_, dx_ = _data['grid']
 
     # Filter solar hours with loading solar set
@@ -69,16 +76,21 @@ def _run_ffc(process_, _data, _params, time):
     idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) + np.sum(E_tr_bias_[idx_days_, :], axis = 0)) > 1.
 
     # Initialize functional dynamic update model for this region and day
-    _fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 
-                                      'spatial': 'haversine',
-                                      'fusion': 'dynamic'}, assets_ts_[asset], T_ts_[day, time])
+    _fdu = functional_dynamic_update(
+        {'temporal': 'seasonal_equinox', 'spatial': 'haversine', 'fusion': 'dynamic'},
+        assets_ts_[asset],
+        T_ts_[day, time]
+    )
+    #_fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 'spatial': 'graph', 'fusion': 'None'}, region)
 
     # Fit functional dynamic update model on training data
-    _fdu.fit(F_tr_, E_tr_lin_, dt_, 
-             X_ = X_tr_, 
-             t_ = t_tr_, 
-             interval_mask = idx_hours_, 
-             n_samples_per_hour = 12)
+    _fdu.fit(
+        F_tr_, E_tr_lin_, dt_,
+        X_ = X_tr_,
+        t_ = t_tr_,
+        interval_mask = idx_hours_,
+        n_samples_per_hour = 12
+    )
 
     # Get functional predictors for a given test
     f_ = F_ts_[day, :time, asset]
@@ -86,14 +98,20 @@ def _run_ffc(process_, _data, _params, time):
     x_ts_ = X_ts_[asset, :]
     t_ts = t_ts_[day]
 
-    _hyperparams = {**_fixed_hyper[time], **_params,}
+    _opt_params = _bo_params.copy()
+
+    _hyperparams = {**_fixed_hyper[time], **_opt_params,}
+
+    _hyperparams['length_scale_f'] = 1.0 / _hyperparams.pop('tau')
+    _hyperparams['length_scale_e'] = _hyperparams.pop('rho_e') * _hyperparams['length_scale_f']
+    _hyperparams['length_scale_d'] = _hyperparams.pop('rho_d') * _hyperparams['length_scale_f']
 
     try:
-        # Forecasting update    
+        # Forecasting update
         M_hat_ = _fdu.predict(f_, e_lin_, x_ts_, t_ts, **_hyperparams)
 
         e_ = E_ts_[day, time:, asset]
-        f_hat_ = F_ts_[day, time:, asset]  
+        f_hat_ = F_ts_[day, time:, asset]
 
         # PIT values from marginal empirical density function
         pit_ = _empirical_PIT(f_hat_, M_hat_.T, seed = 1234)
@@ -102,16 +120,16 @@ def _run_ffc(process_, _data, _params, time):
         f_deepest_ = _fdu.depth_confidence_bands(ModifiedBandDepth(), M_hat_, ALPHAS, ALPHAS)[0]
 
         # Confidence bands from marginal empirical density function
-        f_median_, _upper, _lower = _fdu.ecdf_confidence_bands(M_hat_, ALPHAS)
-        
+        f_median_, _upper, _lower = _fdu.weighted_ecdf_confidence_bands(M_hat_, _fdu.w_prime_, ALPHAS)
+        f_median_ = f_median_[:, 0]
         # Scoring rules
         es = _energy_score(M_hat_, f_hat_)
-        wis = _weighted_interval_score(f_hat_, f_median_, _lower, _upper, ALPHAS).mean()
-        mse = np.mean((f_hat_ - _fdu.f_focal_)**2)
+        wis = _weighted_interval_score(f_hat_, _fdu.f_focal_, _lower, _upper, ALPHAS).mean()
+        rmse = np.sqrt(np.mean((f_hat_ - _fdu.f_focal_)**2))
         mae = np.mean(np.absolute(f_hat_ - _fdu.f_focal_))
 
         # Collect scoring rules
-        psr_ = np.array([time, asset, day, 1.*_fdu.sparse_neighborhood, 1.*_fdu.sparse_temporal, es, wis, mse, mae])
+        psr_ = np.array([time, asset, day, es, wis, rmse, mae])
 
         # Collect statistics
         stat_ = pd.DataFrame(np.std(M_hat_, axis = 0)).T
@@ -121,18 +139,42 @@ def _run_ffc(process_, _data, _params, time):
         stat_['day'] = day
 
         # Collect functional forecasts and actuals
-        f_median_ = pd.DataFrame([f_median_], columns = [f'H{i:02d}' for i in range(len(f_median_))])
+        f_median_ = pd.DataFrame(
+            [f_median_],
+            columns = [f'H{i:02d}' for i in range(len(f_median_))]
+        )
+
         f_median_['type'] = 'median'
-        f_deepest_ = pd.DataFrame([f_deepest_], columns = [f'H{i:02d}' for i in range(len(f_deepest_))])
+
+        f_deepest_ = pd.DataFrame(
+            [f_deepest_],
+            columns = [f'H{i:02d}' for i in range(len(f_deepest_))]
+        )
+
         f_deepest_['type'] = 'deepest'
-        f_focal_ = pd.DataFrame([_fdu.f_focal_], columns = [f'H{i:02d}' for i in range(len(_fdu.f_focal_))])
+
+        f_focal_ = pd.DataFrame(
+            [_fdu.f_focal_],
+            columns = [f'H{i:02d}' for i in range(len(_fdu.f_focal_))]
+        )
+
         f_focal_['type'] = 'focal'
-        f_ac_ = pd.DataFrame([f_hat_], columns = [f'H{i:02d}' for i in range(len(f_hat_))])
+
+        f_ac_ = pd.DataFrame(
+            [f_hat_],
+            columns = [f'H{i:02d}' for i in range(len(f_hat_))]
+        )
+
         f_ac_['type'] = 'actual'
-        f_fc_ = pd.DataFrame([e_], columns = [f'H{i:02d}' for i in range(len(e_))])
+
+        f_fc_ = pd.DataFrame(
+            [e_],
+            columns = [f'H{i:02d}' for i in range(len(e_))]
+        )
+
         f_fc_['type'] = 'forecast'
 
-        f_ = pd.concat([f_median_, f_deepest_, f_focal_, f_ac_, f_fc_], axis = 0)  
+        f_ = pd.concat([f_median_, f_deepest_, f_focal_, f_ac_, f_fc_], axis = 0)
         f_['time'] = time
         f_['asset'] = asset
         f_['day'] = day
@@ -144,8 +186,17 @@ def _run_ffc(process_, _data, _params, time):
     return pit_, psr_, stat_, f_
 
 # Run FFC experiments for a given process and set of parameters, and compute confidence bands and scoring rules.
-def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k_, time):
-    
+def _run_ffc_envelope(
+        process_,
+        _data,
+        _bo_params,
+        distances_,
+        fractions_,
+        alpha_,
+        k_,
+        time
+):
+
     asset, day = process_
 
     file_name = f'{asset}-{day}-{time}'
@@ -157,7 +208,7 @@ def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k
     E_tr_lin_, E_ts_lin_ = _data['day-ahead_linear_fc']
     E_tr_, E_ts_ = _data['day-ahead_fc']
     t_tr_, t_ts_ = _data['dates']
-    X_tr_, X_ts_ = _data['locations'] 
+    X_tr_, X_ts_ = _data['locations']
     dt_, dx_ = _data['grid']
 
     # Filter solar hours with loading solar set
@@ -165,16 +216,20 @@ def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k
     idx_hours_ = (np.sum(F_tr_[idx_days_, :], axis = 0) + np.sum(E_tr_bias_[idx_days_, :], axis = 0)) > 1.
 
     # Initialize functional dynamic update model
-    _fdu = functional_dynamic_update({'temporal': 'seasonal_equinox', 
-                                      'spatial': 'haversine',
-                                      'fusion': 'dynamic'}, assets_ts_[asset], T_ts_[day, time])
+    _fdu = functional_dynamic_update(
+        {'temporal': 'seasonal_equinox','spatial': 'haversine', 'fusion': 'dynamic'},
+        assets_ts_[asset],
+        T_ts_[day, time]
+    )
 
     # Fit functional dynamic update model on training data
-    _fdu.fit(F_tr_, E_tr_lin_, dt_, 
-             X_ = X_tr_, 
-             t_ = t_tr_, 
-             interval_mask = idx_hours_,
-             n_samples_per_hour = 12)
+    _fdu.fit(
+        F_tr_, E_tr_lin_, dt_,
+        X_ = X_tr_,
+        t_ = t_tr_,
+        interval_mask = idx_hours_,
+        n_samples_per_hour = 12
+    )
 
     # Get functional predictors for a given test
     f_ = F_ts_[day, :time, asset]
@@ -184,25 +239,34 @@ def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k
     e_ = E_ts_[day, time:, asset]
     f_hat_ = F_ts_[day, time:, asset]
 
-    _hyperparams = {**_fixed_hyper[time], **_params,}
+    _opt_params = _bo_params.copy()
 
-    try:    
+    _hyperparams = {**_fixed_hyper[time], **_opt_params,}
+
+    _hyperparams['length_scale_f'] = 1.0 / _hyperparams.pop('tau')
+    _hyperparams['length_scale_e'] = _hyperparams.pop('rho_e') * _hyperparams['length_scale_f']
+    _hyperparams['length_scale_d'] = _hyperparams.pop('rho_d') * _hyperparams['length_scale_f']
+
+    try:
         M_hat_ = _fdu.predict(f_, e_lin_, x_ts_, t_ts, **_hyperparams)
 
         # Confidence bands from depth function
-        M_hat_int_, M_hat_int_ds_ = _fdu.functional_downsampling(subsample = 12, 
-                                                                 n_basis = int(f_.shape[0]/8)) 
+        M_hat_int_, M_hat_int_ds_ = _fdu.functional_downsampling(
+            subsample = 12,
+            n_basis = 20,
+        )
 
         _depth = ModifiedBandDepth()
 
         results_ = []
         for distance in distances_:
-            
+
             # Empirical confidence bands
             if (distance == 'ECDF'):
 
                 # Confidence bands from marginal empirical density function
-                f_median_ext_, _upper_ecdf, _lower_ecdf = _fdu.ecdf_confidence_bands(M_hat_, alpha_)
+                f_median_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(M_hat_, _fdu.w_prime_, alpha_)
+                f_median_ = f_median_[:, 0]
 
                 for alpha in alpha_:
                     FIS_ecdf = _interval_score(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'], alpha).mean()
@@ -210,13 +274,15 @@ def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k
                     SCP_ecdf = _simultaneous_coverage(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'])
 
                     # Save results
-                    results_.append([time, asset, day, alpha, M_hat_.shape[0], 'ECDF', M_hat_.shape[0], M_hat_.shape[0], FIS_ecdf, FCS_ecdf, SCP_ecdf])
+                    results_.append([time, asset, day, alpha, 1, 'ECDF', FIS_ecdf, FCS_ecdf, SCP_ecdf])
+
+                f_ = f_median_
 
             # depth-based envelope
             if (distance == 'MBD'):
 
                 for fraction in fractions_:
-                    if fraction is not None: 
+                    if fraction is not None:
                         k_ = [fraction, fraction, fraction, fraction]
 
                     f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(_depth, M_hat_int_, alpha_, k_)
@@ -227,76 +293,106 @@ def _run_ffc_envelop(process_, _data, _params, distances_, fractions_, alpha_, k
                         SCP_depth = _simultaneous_coverage(f_hat_, _lower_depth[f'{alpha}'][1:], _upper_depth[f'{alpha}'][1:])
 
                         # Save results
-                        results_.append([time, asset, day, alpha, fraction, distance, M_hat_.shape[0], M_hat_.shape[0], FIS_depth, FCS_depth, SCP_depth])
+                        results_.append([time, asset, day, alpha, fraction, distance, FIS_depth, FCS_depth, SCP_depth])
+
+                f_ = f_deepest_[1:]
 
             # Focal curve envelope
-            if (distance == 'l2') or (distance == 'sup') or (distance == 'fknn'):
+            if (distance == 'fknn'):
 
                 J_hat_ = _fdu.focal_curve_envelope(_depth, M_hat_int_, distance, max_iter = 100)
 
                 for fraction in fractions_:
-                    if fraction is not None: 
+                    if fraction is not None:
                         k_ = [fraction, fraction, fraction, fraction]
-                    
-                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelop_confidence_bands(alpha_, k_)
+
+                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_bands(alpha_, k_)
 
                     for alpha in alpha_:
                         FIS_focal = _interval_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:], alpha).mean()
                         FCS_focal = _coverage_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:])
                         SCP_focal = _simultaneous_coverage(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:])
 
-                        results_.append([time, asset, day, alpha, fraction, distance, M_hat_.shape[0], J_hat_.shape[0], FIS_focal, FCS_focal, SCP_focal])
-        
-        results_ = np.stack(results_)
+                        results_.append([time, asset, day, alpha, fraction, distance, FIS_focal, FCS_focal, SCP_focal])
+
+                f_ = f_focal_[1:]
+
+        #print(distance, f_.shape, f_hat_.shape)
+        rmse = np.sqrt(np.mean((f_hat_ - f_)**2))
+        mae = np.mean(np.absolute(f_hat_ - f_))
+        mbe = np.mean(f_hat_ - f_)
+
+        prob_results_ = np.stack(results_)
+        det_results_  = np.array([time, asset, day, distance, rmse, mae, mbe])[np.newaxis, :]
 
     except Exception as e:
         print(RANK, file_name, e)
+        return None, None
 
-        return None
-
-    return results_
+    return prob_results_, det_results_
 
 # Run FFC experiments in parallel with MPI
-def _run_ffc_envelop_parallel_mpi(_data, _params, processes_, distances_, alpha_, time,
-                                  fractions_ = [None],
-                                  k_ = None):
+def _run_ffc_envelope_parallel_mpi(
+        _data,
+        _params,
+        processes_,
+        distances_,
+        alpha_,
+        time,
+        fractions_ = [None],
+        k_ = None
+):
 
-    _func = partial(_run_ffc_envelop,
-                    _data=_data,
-                    _params=_params,
-                    distances_=distances_,
-                    fractions_=fractions_, 
-                    alpha_=alpha_, 
-                    k_=k_,
-                    time=time)
+    _func = partial(
+        _run_ffc_envelope,
+        _data=_data,
+        _bo_params=_params,
+        distances_=distances_,
+        fractions_=fractions_,
+        alpha_=alpha_,
+        k_=k_,
+        time=time
+    )
 
-    local_results = []
+    prob_local_results = []
+    det_local_results = []
 
-    local_processes_ = np.array_split(processes_, SIZE)[RANK] 
+    local_processes_ = np.array_split(processes_, SIZE)[RANK]
     for process_ in local_processes_:
-        results_list = _func(process_) 
-        
-        if (results_list is not None) and (results_list is not None):
-            local_results.append(results_list)
-    
-    if (len(local_results) / len(local_processes_)) > 0.5:
+        prob_results_list, det_results_list = _func(process_)
 
-        local_results = np.concatenate(local_results, axis = 0)
+        if (prob_results_list is not None) and (det_results_list is not None):
+            prob_local_results.append(prob_results_list)
+            det_local_results.append(det_results_list)
 
-        return local_results
+    n_local = len(local_processes_)
+    if n_local > 0 and (len(prob_local_results) / n_local) > 0.5:
+
+        prob_local_results = np.concatenate(prob_local_results, axis = 0)
+        det_local_results = np.concatenate(det_local_results, axis = 0)
+
+        return prob_local_results, det_local_results
     else:
-        return None
+        return None, None
 
 # Run FFC experiments in parallel with MPI
-def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
+def _run_ffc_parallel_mpi(
+        _data,
+        _params,
+        processes_,
+        time,
+        lambda_0
+):
 
-    _func = partial(_run_ffc,
-                    _data=_data,
-                    _params=_params,
-                    time=time)
+    _func = partial(
+        _run_ffc,
+        _data=_data,
+        _bo_params=_params,
+        time=time
+    )
 
     # Split processes among ranks
-    local_processes_ = np.array_split(processes_, SIZE)[RANK] 
+    local_processes_ = np.array_split(processes_, SIZE)[RANK]
 
     # Each rank processes its assigned subset of processes and collects local results
     local_pit_ = []
@@ -305,7 +401,7 @@ def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
     local_func_ = []
 
     for process_ in local_processes_:
-        pit_, psr_, stat_, func_ = _func(process_) 
+        pit_, psr_, stat_, func_ = _func(process_)
         # Only keep results if not None (i.e., if the process succeeded)
         if (pit_ is not None) and (psr_ is not None):
             local_pit_.append(pit_)
@@ -315,16 +411,15 @@ def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
 
     # Only keep results if more than 90% of local processes succeeded
     # (to avoid skewed results from too few samples)
-    if (len(local_pit_) / len(local_processes_)) > 0.9:
+    n_local = len(local_processes_)
+    if n_local > 0 and (len(local_pit_) / n_local) > 0.9:
         local_pit_ = np.stack(local_pit_, axis = 0)
         local_psr_ = np.stack(local_psr_, axis = 0)
         local_stat_ = pd.concat(local_stat_, axis = 0)
         local_func_ = pd.concat(local_func_, axis = 0)
+
     else:
-        local_pit_ = None
-        local_psr_ = None
-        local_stat_ = None
-        local_func_ = None
+        local_pit_ = local_psr_ = local_stat_ = local_func_ = None
 
     # Gather all local results
     pit_ = COMM.gather(local_pit_, root=0)
@@ -336,10 +431,11 @@ def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
     if RANK == 0:
         # Make sure to filter out any None results from failed processes
         pit_ = [x for x in pit_ if x is not None]
+        
         # If not all processes returned results, skip this parameter combination
         if len(pit_) != SIZE:
-            ks = 1e10
-        
+            score = 1e10
+
         else:
             # Concatenate results from all processes
             pit_ = np.concatenate(pit_, axis=0)
@@ -350,7 +446,7 @@ def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
             try:
                 # Calculate aggregated PIT
                 ks = np.array([_KS(pit_[:, j:(j + LEAD)].flatten()) for j in INTERVALS]).mean()
-                rmse = np.sqrt(np.mean(psr_[:, -2].astype(float)))
+                rmse = np.mean(psr_[:, -2].astype(float))
                 mae = np.mean(psr_[:, -1].astype(float))
                 score = ks + lambda_0*rmse
 
@@ -365,9 +461,9 @@ def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
             # Penalize score if produces floating point error
             except FloatingPointError as e:
                 print("     Skipping parameter due to KS failure")
-                return 1e10
-        
-    else: 
+                score = 1e10
+
+    else:
         score = None
         pit_ = None
         psr_ = None
@@ -384,7 +480,14 @@ def _run_ffc_parallel_mpi(_data, _params, processes_, time, lambda_0):
     return score, pit_, psr_, stat_, func_
 
 # Objective function used by Optuna for Bayesian hyperparameter optimization.
-def _objective(trial, _data, _hyper, processes_val_, time, lambda_0):
+def _objective(
+        trial,
+        _data,
+        _hyper,
+        processes_val_,
+        time,
+        lambda_0
+):
 
     if RANK == 0:
         # Dictionary storing sampled hyperparameters
@@ -416,10 +519,15 @@ def _objective(trial, _data, _hyper, processes_val_, time, lambda_0):
     return _run_ffc_parallel_mpi(_data, _params, processes_val_, time, lambda_0)[0]
 
 # Generate and enqueue Latin Hypercube Sampling (LHS) trials for Optuna Bayesian optimization.
-def _latin_hypercube_initialization(_bo, _params, n_samples):
+def _latin_hypercube_initialization(
+        _bo,
+        _params,
+        n_samples,
+        seed,
+):
 
     # Latin Hypercube sampler
-    _lhs = qmc.LatinHypercube(d=len(_params))
+    _lhs = qmc.LatinHypercube(d=len(_params), seed=seed)
 
     # Generate samples in [0,1]
     for sample in _lhs.random(n=n_samples):
@@ -440,7 +548,7 @@ def _latin_hypercube_initialization(_bo, _params, n_samples):
             else:
                 # Unknown scaling type
                 raise ValueError(f"Unknown scale type: {scale}")
-            
+
             if type(high) == int:
                 # Interger parameter
                 x_[name] = int(round(x_[name]))
@@ -454,12 +562,12 @@ def _latin_hypercube_initialization(_bo, _params, n_samples):
     return _bo
 
 # Number of interation
-N_bo_iter = 250
-N_lhs_init = 125
+N_bo_iter = 200
+N_lhs_init = 100
 
 # Calibration experiments setup
 resource = sys.argv[1]
-method = sys.argv[2] 
+method = sys.argv[2]
 time = int(sys.argv[3])
 init = int(sys.argv[4])
 lambda_0 = float(sys.argv[5])
@@ -469,38 +577,39 @@ print(resource, method, time, init, lambda_0, unbiased, description)
 
 # Significance levels for the confidence intervals
 ALPHAS = [0.1, 0.2, 0.3, 0.4]
-
+HYPERPARAMETERS = True
+ENVELOPE = True
 # KS evaluation intervals and lead time for the FFC experiments
 if resource == 'wind':
-    if time == 72: 
+    if time == 72:
         LEAD = 36
         INTERVALS = [0, 36, 72, 108, 144, 180]
-    elif time == 144: 
+    elif time == 144:
         LEAD = 24
         INTERVALS = [0, 24, 48, 72, 96, 120]
-    elif time == 216: 
+    elif time == 216:
         LEAD = 12
         INTERVALS = [0, 12, 24, 36, 48, 60]
     else:
         exit("Invalid time horizon. Must be one of [72, 144, 216].")
 elif resource == 'solar':
-    if time == 120: 
+    if time == 120:
         LEAD = 12
         INTERVALS = [0, 12, 24, 36, 48, 60]
-    elif time == 132: 
+    elif time == 132:
         LEAD = 9
         INTERVALS = [0, 9, 18, 27, 36, 45]
-    elif time == 144: 
+    elif time == 144:
         LEAD = 9
         INTERVALS = [0, 9, 18, 27, 36, 45]
-    elif time == 168: 
+    elif time == 168:
         LEAD = 6
         INTERVALS = [0, 6, 12, 18, 24, 30]
     else:
         exit("Invalid time horizon. Must be one of [72, 144, 216].")
 else:
     exit("Invalid resource. Must be one of ['wind', 'solar'].")
-    
+
 # MPI setup
 COMM = MPI.COMM_WORLD
 RANK = COMM.Get_rank()
@@ -511,56 +620,38 @@ if resource == 'wind':
 
     # Fixed parameters depending on interval for wind
     _fixed_hyper = {
-        72:  {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
-        144: {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
-        216: {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
-        # 72:  {'p_fusion': 0.75},
-        # 144: {'p_fusion': 0.75},
-        # 216: {'p_fusion': 0.75},
+        72:  {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        144: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        216: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
     }
 
     # Hyperparameter combinations
     _hyper = {
-        'forget_rate_f': [0.0625, 12., 'log'],
-        'forget_rate_e': [0.0625, 24., 'log'],
-        #'length_scale_f':[0.0025, 1., 'log'],
-        #'length_scale_e': [0.0025, 10., 'log'],
-        'lookup_rate': [1., 24., 'linear'],
-        'nu': [2., 12., 'linear'],
-        'trust_rate': [0.05, 0.95, 'linear'],
-        'xi': [0.05, 0.95, 'linear'],
-        #'gamma': [15, 90, 'linear'],
-        'kappa': [50, 250, 'linear'],
-        'p_fusion': [0.75, 1., 'linear'],
+        'rho_e':   [1e-5,  1000.,  'log'],   # λ_e / λ_f
+        'rho_d':   [1e-5,  1000.,  'log'],   # λ_d / λ_f
+        #'tau':     [1e-5,  1000.,  'log'],   # temperature = 1 / λ_f
+        'kappa_0': [150,   5000,   'log'],
+        'nu':      [1,     12,     'linear'],
+        'sigma':   [0.,    1.,     'linear'],
     }
 
 elif resource == 'solar':
 
     # Fixed parameters depending on interval for solar
     _fixed_hyper = {
-        # 120: {'p_fusion': 0.75},
-        # 132: {'p_fusion': 0.75},
-        # 144: {'p_fusion': 0.75},
-        # 168: {'p_fusion': 0.75},
-        120: {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
-        132: {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
-        144: {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
-        168: {'length_scale_f': 0.0025, 'length_scale_e': 0.1},
+        120: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        144: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        168: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
     }
 
     # Hyperparameter combinations
     _hyper = {
-        'forget_rate_f': [0.0625, 12., 'log'],
-        'forget_rate_e': [0.0625, 24., 'log'],
-        #'length_scale_f':[0.0025, 1., 'log'],
-        #'length_scale_e': [0.0075, 10., 'log'],
-        'lookup_rate': [1., 24., 'linear'],
-        'nu': [2., 12., 'linear'],
-        'trust_rate': [0.05, .95, 'linear'],
-        'xi': [0.05, 0.95, 'linear'],
-        'gamma': [15, 90, 'linear'],
-        'kappa': [50, 250, 'linear'],
-        'p_fusion': [0.75, 1., 'linear'],
+        'rho_e':   [1e-5,  1000.,  'log'],   # λ_e / λ_f
+        'rho_d':   [1e-5,  1000.,  'log'],   # λ_d / λ_f
+        #'tau':     [1e-5,  1000.,  'log'],   # temperature = 1 / λ_f
+        'kappa_0': [150,   5000,   'log'],
+        'nu':      [1,     12,     'linear'],
+        'sigma':   [0.,    1.,     'linear'],
     }
 
 else:
@@ -568,412 +659,201 @@ else:
 
 
 ## -------------------------- LOAD DATA ---------------------------------
-T = 288
-# Load 2017 data as training set
-with open(path_to_data + f"/preprocessed_{resource}_2017.pkl", 'rb') as f:
-    _data = pkl.load(f)
+(
+    F_tr_,
+    F_ts_,
+    E_tr_,
+    E_ts_,
+    X_tr_,
+    X_ts_,
+    T_tr_,
+    T_ts_,
+    assets_tr_,
+    assets_ts_,
+    t_tr_,
+    t_ts_,
+    dt_,
+    dx_,
+) = loader.preprocessed_dataset(
+    unbiased = unbiased,
+    path_to_training_data = DATA / "preprocessed_wind_2017.pkl",
+    path_to_testing_data = DATA / "preprocessed_wind_2018.pkl",
+    T = 288,
+)
 
-assets_tr_ = _data["assets"]
-F_tr_      = _data["observations"]
-E_tr_      = _data["forecasts"]
-#print(assets_tr_.shape, F_tr_.shape, E_tr_.shape)
+# print(F_tr_.shape, F_ts_.shape)
+# print(E_tr_.shape, E_ts_.shape)
+# print(X_tr_.shape, X_ts_.shape)
+# print(T_tr_.shape, T_ts_.shape)
+# print(assets_tr_.shape, assets_ts_.shape)
+# print(t_tr_.shape, t_ts_.shape)
+# print(dt_.shape, dx_.shape)
 
-# Reshape to day x interval x asset format
-F_tr_ = F_tr_.reshape(int(F_tr_.shape[0]/T), T, F_tr_.shape[1])
-E_tr_ = E_tr_.reshape(int(E_tr_.shape[0]/T), T, E_tr_.shape[1])
-#print(F_tr_.shape, E_tr_.shape)
+E_tr_lin_, E_ts_lin_ = loader.processed_dataset(
+    unbiased = unbiased,
+    path_to_training_data = DATA / "linear_preprocessed_wind_2017.pkl",
+    path_to_testing_data = DATA / "linear_preprocessed_wind_2018.pkl",
+    T = 288,
+)
 
-# Load 2018 data as testing set
-with open(path_to_data + f"/preprocessed_{resource}_2018.pkl", 'rb') as f:
-    _data = pkl.load(f)
+# print(E_tr_lin_.shape, E_ts_lin_.shape)
 
-assets_ts_ = _data["assets"]
-F_ts_ = _data["observations"]
-E_ts_ = _data["forecasts"]
-#print(assets_ts_.shape, F_ts_.shape, E_ts_.shape)
+E_tr_biased_, E_ts_biased_ = loader.processed_dataset(
+    unbiased = False,
+    path_to_training_data = DATA / "preprocessed_wind_2017.pkl",
+    path_to_testing_data = DATA / "preprocessed_wind_2018.pkl",
+    T = 288,
+)
 
-# Reshape to day x interval x asset format
-F_ts_ = F_ts_.reshape(int(F_ts_.shape[0]/T), T, F_ts_.shape[1])
-E_ts_ = E_ts_.reshape(int(E_ts_.shape[0]/T), T, E_ts_.shape[1])
-#print(F_ts_.shape, E_ts_.shape)
-
-# Short testing set with training set order
-order = {v: i for i, v in enumerate(assets_tr_)}
-idx_ = np.argsort([order[x] for x in assets_ts_])
-F_ts_ = F_ts_[:, :, idx_]
-E_ts_ = E_ts_[:, :, idx_]
-#print(F_ts_.shape, E_ts_.shape)
-
-# From generation to capacity factor
-p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
-p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
-#print(p_tr_.shape, p_ts_.shape)
-
-F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
-F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
-E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
-E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-
-# No possible capacity factor is larger than 1 or smaller than 0
-F_tr_ = np.clip(F_tr_, 0., 1.)
-F_ts_ = np.clip(F_ts_, 0., 1.)
-E_tr_ = np.clip(E_tr_, 0., 1.)
-E_ts_ = np.clip(E_ts_, 0., 1.)
-F_tr_ /= F_tr_.max()
-F_ts_ /= F_ts_.max()
-E_tr_ /= E_tr_.max()
-E_ts_ /= E_ts_.max()
-#print(F_tr_.min(), F_tr_.max(), E_tr_.min(), E_tr_.max())
-#print(F_ts_.min(), F_ts_.max(), E_ts_.min(), E_ts_.max())
-
-# Format training set from day x interval x asset to [day * asset] x interval
-E_ts_bias_ = E_ts_.copy()
-E_tr_bias_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
-#print(E_tr_bias_.shape, E_ts_bias_.shape)
-
-## LOAD UNBIASED DATA WITH LINEAR INTERPOLATION
-# Load 2017 data as training set
-with open(path_to_data + f"/linear_preprocessed_{resource}_2017.pkl", 'rb') as f:
-    _data = pkl.load(f)
-
-assets_tr_ = _data["assets"]
-F_tr_ = _data["observations"]
-E_tr_ = _data["forecasts"]
-#print(assets_tr_.shape, F_tr_.shape, E_tr_.shape)
-
-# Reshape to day x interval x asset format
-F_tr_ = F_tr_.reshape(int(F_tr_.shape[0]/T), T, F_tr_.shape[1])
-E_tr_ = E_tr_.reshape(int(E_tr_.shape[0]/T), T, E_tr_.shape[1])
-#print(F_tr_.shape, E_tr_.shape)
-
-# Load 2018 data as testing set
-with open(path_to_data + f"/linear_preprocessed_{resource}_2018.pkl", 'rb') as f:
-    _data = pkl.load(f)
-
-assets_ts_ = _data["assets"]
-F_ts_ = _data["observations"]
-E_ts_ = _data["forecasts"]
-#print(assets_ts_.shape, F_ts_.shape, E_ts_.shape)
-
-# Reshape to day x interval x asset format
-F_ts_ = F_ts_.reshape(int(F_ts_.shape[0]/T), T, F_ts_.shape[1])
-E_ts_ = E_ts_.reshape(int(E_ts_.shape[0]/T), T, E_ts_.shape[1])
-#print(F_ts_.shape, E_ts_.shape)
-
-# Short testing set with training set order
-order = {v: i for i, v in enumerate(assets_tr_)}
-idx_ = np.argsort([order[x] for x in assets_ts_])
-F_ts_ = F_ts_[:, :, idx_]
-E_ts_ = E_ts_[:, :, idx_]
-#print(F_ts_.shape, E_ts_.shape)
-
-# From generation to capacity factor
-p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
-p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
-#print(p_tr_.shape, p_ts_.shape)
-
-F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
-F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
-E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
-E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-
-# Bias-correct the forecasts
-if unbiased:
-    E_tr_ = _bias_corrected_forecast(F_tr_, E_tr_)
-    E_ts_ = _bias_corrected_forecast(F_ts_, E_ts_)
-    #print(E_tr_.shape, E_ts_.shape)
-
-# No possible capacity factor is larger than 1 or smaller than 0
-F_tr_ = np.clip(F_tr_, 0., 1.)
-F_ts_ = np.clip(F_ts_, 0., 1.)
-E_tr_ = np.clip(E_tr_, 0., 1.)
-E_ts_ = np.clip(E_ts_, 0., 1.)
-F_tr_ /= F_tr_.max()
-F_ts_ /= F_ts_.max()
-E_tr_ /= E_tr_.max()
-E_ts_ /= E_ts_.max()
-#print(F_tr_.min(), F_tr_.max(), E_tr_.min(), E_tr_.max())
-#print(F_ts_.min(), F_ts_.max(), E_ts_.min(), E_ts_.max())
-
-# Format training set from day x interval x asset to [day * asset] x interval
-E_ts_lin_ = E_ts_.copy()
-E_tr_lin_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
-#print(E_ts_lin_.shape, E_tr_lin_.shape)
-
-## LOAD UNBISED DATA
-# Load 2017 data as training set
-with open(path_to_data + f"/preprocessed_{resource}_2017.pkl", 'rb') as f:
-    _data = pkl.load(f)
-
-assets_tr_ = _data["assets"]
-X_tr_ = _data["locations"]
-dates_tr_ = _data["dates"]
-F_tr_ = _data["observations"]
-E_tr_ = _data["forecasts"]
-#print(assets_tr_.shape, X_tr_.shape, dates_tr_.shape, F_tr_.shape, E_tr_.shape)
-
-# Reshape to day x interval x asset format
-F_tr_ = F_tr_.reshape(int(F_tr_.shape[0]/T), T, F_tr_.shape[1])
-E_tr_ = E_tr_.reshape(int(E_tr_.shape[0]/T), T, E_tr_.shape[1])
-T_tr_ = dates_tr_.reshape(int(dates_tr_.shape[0]/T), T)
-#print(F_tr_.shape, E_tr_.shape, T_tr_.shape)
-
-# Load 2018 data as testing set
-with open(path_to_data + f"/preprocessed_{resource}_2018.pkl", 'rb') as f:
-    _data = pkl.load(f)
-
-assets_ts_ = _data["assets"]
-X_ts_ = _data["locations"]
-dates_ts_ = _data["dates"]
-F_ts_ = _data["observations"]
-E_ts_ = _data["forecasts"]
-#print(assets_ts_.shape, X_ts_.shape, dates_ts_.shape, F_ts_.shape, E_ts_.shape)
-
-# Reshape to day x interval x asset format
-F_ts_ = F_ts_.reshape(int(F_ts_.shape[0]/T), T, F_ts_.shape[1])
-E_ts_ = E_ts_.reshape(int(E_ts_.shape[0]/T), T, E_ts_.shape[1])
-T_ts_ = dates_ts_.reshape(int(dates_ts_.shape[0]/T), T)
-#print(F_ts_.shape, E_ts_.shape, T_ts_.shape)
-
-dt_ = np.array([t * 5 for t in range(T)])
-dx_ = pd.to_datetime(pd.DataFrame({"time": dt_}).time, unit = "m").dt.strftime("%H:%M").to_numpy()
-#print(dt_.shape, dx_.shape)
-
-# Short testing set with training set order
-order = {v: i for i, v in enumerate(assets_tr_)}
-idx_ = np.argsort([order[x] for x in assets_ts_])
-assets_ts_ = assets_ts_[idx_]
-X_ts_ = X_ts_[idx_]
-F_ts_ = F_ts_[:, :, idx_]
-E_ts_ = E_ts_[:, :, idx_]
-#print(F_ts_.shape, E_ts_.shape, T_ts_.shape)
-
-# From generation to capacity factor
-p_tr_ = np.max(np.max(F_tr_, axis = 0), axis = 0)
-p_ts_ = np.max(np.max(F_ts_, axis = 0), axis = 0)
-#print(p_tr_.shape, p_ts_.shape)
-
-F_tr_ /= np.tile(p_tr_, (F_tr_.shape[0], F_tr_.shape[1], 1))
-E_tr_ /= np.tile(p_tr_, (E_tr_.shape[0], E_tr_.shape[1], 1))
-F_ts_ /= np.tile(p_ts_, (F_ts_.shape[0], F_ts_.shape[1], 1))
-E_ts_ /= np.tile(p_ts_, (E_ts_.shape[0], E_ts_.shape[1], 1))
-# print(F_tr_.min(), F_tr_.max())
-# print(E_tr_.min(), E_tr_.max())
-# print(F_ts_.min(), F_ts_.max())
-# print(E_ts_.min(), E_ts_.max())
-
-# Unbias the forecasts
-if unbiased:
-    E_tr_ = _bias_corrected_forecast(F_tr_, E_tr_)
-    E_ts_ = _bias_corrected_forecast(F_ts_, E_ts_)
-    #print(E_tr_.shape, E_ts_.shape)
-
-# No possible capacity factor is larger than 1 or smaller than 0
-F_tr_ = np.clip(F_tr_, 0., 1.)
-F_ts_ = np.clip(F_ts_, 0., 1.)
-E_tr_ = np.clip(E_tr_, 0., 1.)
-E_ts_ = np.clip(E_ts_, 0., 1.)
-F_tr_ /= F_tr_.max()
-F_ts_ /= F_ts_.max()
-E_tr_ /= E_tr_.max()
-E_ts_ /= E_ts_.max()
-#print(F_tr_.min(), F_tr_.max(), E_tr_.min(), E_tr_.max())
-#print(F_ts_.min(), F_ts_.max(), E_ts_.min(), E_ts_.max())
-
-# Format training set from day x interval x asset to [day * asset] x interval
-T_tr_ = np.concatenate([T_tr_ for k in range(assets_tr_.shape[0])], axis = 0)
-assets_tr_ = np.concatenate([np.tile(assets_tr_[k], (F_tr_.shape[0], 1)) for k in range(assets_tr_.shape[0])], axis = 0)
-X_tr_ = np.concatenate([np.tile(X_tr_[k, :], (F_tr_.shape[0], 1)) for k in range(X_tr_.shape[0])], axis = 0)
-F_tr_ = np.concatenate([F_tr_[..., k] for k in range(F_tr_.shape[2])], axis = 0)
-E_tr_ = np.concatenate([E_tr_[..., k] for k in range(E_tr_.shape[2])], axis = 0)
-#print(X_tr_.shape, assets_tr_.shape, F_tr_.shape, E_tr_.shape, T_tr_.shape)
-#print(X_ts_.shape, assets_ts_.shape, F_ts_.shape, E_ts_.shape, T_ts_.shape)
-
-t_tr_ = np.array([datetime.strptime(t_tr, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_tr in T_tr_[:, 0]]) - 1
-t_ts_ = np.array([datetime.strptime(t_ts, "%Y-%m-%d %H:%M:%S").timetuple().tm_yday for t_ts in T_ts_[:, 0]]) - 1
-#print(t_tr_.shape, t_ts_.shape)
-
-if RANK == 0: 
-    print(f'[Resource {resource}][Method {method}][Horizon {time}h][Initialization {init}]')
-    print('----- HYPERPARAMETERS VALIDATION ----')
+# print(E_tr_biased_.shape, E_ts_biased_.shape)
 
 # Load dataset
-_data = {'ac': [F_tr_, F_ts_],
-         'day-ahead_bias_fc': [E_tr_bias_, E_ts_bias_],
-         'day-ahead_linear_fc': [E_tr_lin_, E_ts_lin_],
-         'day-ahead_fc': [E_tr_, E_ts_],
-         'dates': [t_tr_, t_ts_],
-         'locations': [X_tr_, X_ts_],
-         'grid': [dt_, dx_]}
+_data = {
+    'ac': [F_tr_, F_ts_],
+    'day-ahead_bias_fc': [E_tr_biased_, E_ts_biased_],
+    'day-ahead_linear_fc': [E_tr_lin_, E_ts_lin_],
+    'day-ahead_fc': [E_tr_, E_ts_],
+    'dates': [t_tr_, t_ts_],
+    'locations': [X_tr_, X_ts_],
+    'grid': [dt_, dx_]
+}
 
 processes_val_ = [(asset, j) for asset in range(0, 10) for j in range(0, 360)]
 processes_test_ = [(asset, j) for asset in range(10, 20) for j in range(0, 360)]
 
-if RANK != 0:
+if (RANK == 0) and (HYPERPARAMETERS == True):
+    print(f'[Resource {resource}][Method {method}][Horizon {time}h][Initialization {init}]')
+    print('----- HYPERPARAMETERS VALIDATION ----')
+
+if (RANK != 0) and (HYPERPARAMETERS == True):
     # Disable Optuna logging for non-master ranks to avoid cluttering output
     optuna.logging.disable_default_handler()
 
 # Master execution starts here
-if RANK == 0:
+if (RANK == 0) and (HYPERPARAMETERS == True):
 
+    SEED = 1234 + init 
     # Bayesian optimization with Gaussian Process surrogate model
-    _bo = optuna.create_study(direction="minimize",
-                              sampler=GPSampler(seed=1234, n_startup_trials=0))
+    _bo = optuna.create_study(
+        direction="minimize",
+        sampler=GPSampler(seed=SEED, n_startup_trials=0)
+    )
 
     # Latin Hypercube initialization
-    _bo = _latin_hypercube_initialization(_bo, _hyper, n_samples=N_lhs_init)
+    _bo = _latin_hypercube_initialization(_bo, _hyper, n_samples=N_lhs_init, seed=SEED)
 
 else:
     _bo = None
 
-# Broadcast the Optuna study object to all ranks
-_bo = COMM.bcast(_bo, root=0)
-
 # Define the objective function with fixed arguments using functools.partial
-_func = partial(_objective,
-                _data=_data,
-                _hyper=_hyper,
-                processes_val_=processes_val_,
-                time=time,
-                lambda_0=lambda_0)
+_func = partial(
+    _objective,
+    _data=_data,
+    _hyper=_hyper,
+    processes_val_=processes_val_,
+    time=time,
+    lambda_0=lambda_0
+)
 
-# Optimize hyperparameters
-_bo.optimize(_func, n_trials=N_bo_iter, n_jobs=1)
-
+# Optimize hyperparameters: only rank 0 runs the Optuna loop; the other
+# ranks call the objective the same number of times so they participate
+# in the bcast/Barrier/gather collectives inside it.
 if RANK == 0:
+    _bo.optimize(_func, n_trials=N_bo_iter, n_jobs=1)
+else:
+    for _ in range(N_bo_iter):
+        _func(None)
 
-    # fANOVA
-    importance_fanova = get_param_importances(_bo, evaluator=FanovaImportanceEvaluator())
-    # Random forest impurity
-    importance_mdi = get_param_importances(_bo, evaluator=MeanDecreaseImpurityImportanceEvaluator())
-    # PED-ANOVA
-    importance_pedanova = get_param_importances(_bo, evaluator=PedAnovaImportanceEvaluator())
-
-    dfs = []
-    for importance, results in {'fANOVA': importance_fanova,
-                                'MDI': importance_mdi,
-                                'PED-ANOVA': importance_pedanova}.items():
-
-        df_ = pd.DataFrame({'method': importance, 
-                            'parameter': list(results.keys()), 
-                            'value': list(results.values())})
-
-        dfs.append(df_)
-
-    importance_ = pd.concat(dfs, ignore_index=True)
-
-    importance_['initialization'] = init
-    importance_['time'] = time
-
-    # define results file path
-    importance_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-importance-{description}.csv'
-
-    # load or create DataFrame
-    importance_df =  _read_csv_safe(importance_path)
-
-    # save results
-    importance_df = pd.concat([importance_df, importance_], ignore_index=True)
-    print(importance_df)
-
-    importance_df.to_csv(importance_path, index=False)
-    print(f"Saved importance to {importance_path}")
+if (RANK == 0) and (HYPERPARAMETERS == True):
 
     print('----- HYPERPARAMETERS TEST -----')
     # Retrieve best hyperparameters
     best_ks = _bo.best_value
-    _best_params = _bo.best_params
+    _best_hyper = _bo.best_params
     print(best_ks)
-    print(_best_params)
+    print(_best_hyper)
+    print(_fixed_hyper[time])
 else:
     best_ks = None
-    _best_params = None
+    _best_hyper = None
 
-# Broadcast best hyperparameters to all ranks
-_best_params = COMM.bcast(_best_params, root=0)
+if (HYPERPARAMETERS == True):
+    # Broadcast best hyperparameters to all ranks
+    _best_hyper = COMM.bcast(_best_hyper, root=0)
 
-# Run FFC experiments in parallel
-ks, pit_, psr_, stat_, func_ = _run_ffc_parallel_mpi(_data, _best_params, processes_test_, time, lambda_0)
+    # Run FFC experiments in parallel
+    ks, pit_, psr_, stat_, func_ = _run_ffc_parallel_mpi(
+        _data,
+        _best_hyper,
+        processes_test_,
+        time,
+        lambda_0
+    )
 
-# Gather all local results
-pit_ = COMM.gather(pit_, root=0)
-psr_ = COMM.gather(psr_, root=0)
-stat_ = COMM.gather(stat_, root=0)
-func_ = COMM.gather(func_, root=0)
+if (RANK == 0) and (HYPERPARAMETERS == True):
 
-if RANK == 0:
-
-    # Only root processes all gathered result
-    pit_ = np.concatenate(pit_, axis=0)
-    psr_ = np.concatenate(psr_, axis=0)
-    stat_ = pd.concat(stat_, axis=0)
-    func_ = pd.concat(func_, axis=0)
-    
     # Calculate aggregated PIT
     ks_ = np.array([_KS(pit_[:, j:(j + LEAD)].flatten()) for j in INTERVALS])
     ks_labels_ = [f'S{i}' for i, j in enumerate(INTERVALS)]
 
-    # Proper scores and metrics 
-    test_metrics = {'n_neighbors': np.mean(psr_[:, -6].astype(float)),
-                    'n_temporal': np.mean(psr_[:, -5].astype(float)),
-                    'ES': np.mean(psr_[:, -4].astype(float)),
-                    'WIS': np.mean(psr_[:, -3].astype(float)),
-                    'RMSE': np.sqrt(np.mean(psr_[:, -2].astype(float))),
-                    'MAE': np.mean(psr_[:, -1].astype(float)),
-                    'KS': np.mean(ks_.astype(float)),
-                    ks_labels_[0]: ks_[0],
-                    ks_labels_[1]: ks_[1],
-                    ks_labels_[2]: ks_[2],
-                    ks_labels_[3]: ks_[3],
-                    ks_labels_[4]: ks_[4],
-                    ks_labels_[5]: ks_[5]}
+    # Proper scores and metrics
+    test_metrics = {
+        'ES': np.mean(psr_[:, -4].astype(float)),
+        'WIS': np.mean(psr_[:, -3].astype(float)),
+        'RMSE': np.mean(psr_[:, -2].astype(float)),
+        'MAE': np.mean(psr_[:, -1].astype(float)),
+        'KS': np.mean(ks_.astype(float)),
+        ks_labels_[0]: ks_[0],
+        ks_labels_[1]: ks_[1],
+        ks_labels_[2]: ks_[2],
+        ks_labels_[3]: ks_[3],
+        ks_labels_[4]: ks_[4],
+        ks_labels_[5]: ks_[5]
+    }
 
-    # validation metrics already computed earlier → make sure you keep them
-    # (you already defined val_metrics inside loop; keep last one or compute properly)
-    row_ = {'initialization': init,
-            'time': time,
+    row_ = {
+        'initialization': init,
+        'time': time,
 
-            # Averege validation KS distance
-            'KS_val': best_ks,
+        # Averege validation KS distance
+        'KS_val': best_ks,
 
-            # Neighbors and temporal used in the FFC update (these are averaged over all test samples)
-            'n_neighbors_test': float(test_metrics['n_neighbors']),
-            'n_temporal_test': float(test_metrics['n_temporal']),
+        # test proper scores
+        'ES_test': float(test_metrics['ES']),
+        'WIS_test': float(test_metrics['WIS']),
 
-            # test proper scores
-            'ES_test': float(test_metrics['ES']),
-            'WIS_test': float(test_metrics['WIS']),
+        # Averege test KS distances
+        'RMSE_test': float(test_metrics['RMSE']),
+        'MAE_test': float(test_metrics['MAE']),
+        'KS_test': float(test_metrics['KS']),
 
-            # Averege test KS distances
-            'RMSE_test': float(test_metrics['RMSE']),
-            'MAE_test': float(test_metrics['MAE']),
-            'KS_test': float(test_metrics['KS']),
+        # Test KS distance
+        ks_labels_[0] + '_test': float(test_metrics[ks_labels_[0]]),
+        ks_labels_[1] + '_test': float(test_metrics[ks_labels_[1]]),
+        ks_labels_[2] + '_test': float(test_metrics[ks_labels_[2]]),
+        ks_labels_[3] + '_test': float(test_metrics[ks_labels_[3]]),
+        ks_labels_[4] + '_test': float(test_metrics[ks_labels_[4]]),
+        ks_labels_[5] + '_test': float(test_metrics[ks_labels_[5]]),
 
-            # Test KS distance
-            ks_labels_[0] + '_test': float(test_metrics[ks_labels_[0]]),
-            ks_labels_[1] + '_test': float(test_metrics[ks_labels_[1]]),
-            ks_labels_[2] + '_test': float(test_metrics[ks_labels_[2]]),
-            ks_labels_[3] + '_test': float(test_metrics[ks_labels_[3]]),
-            ks_labels_[4] + '_test': float(test_metrics[ks_labels_[4]]),
-            ks_labels_[5] + '_test': float(test_metrics[ks_labels_[5]]),
+        # parameters
+        **{**_fixed_hyper[time], **_best_hyper}
+    }
 
-            # parameters
-            **_best_params}
-    
     # define results file path
-    results_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-hyper-{description}.csv'
+    results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-hyper-{description}.csv'
 
     # load or create DataFrame
     results_df =  _read_csv_safe(results_path)
 
     # save results
     results_df = pd.concat([results_df, pd.DataFrame([row_])], ignore_index=True)
-    print(results_df)
+    #print(results_df)
 
     results_df.to_csv(results_path, index=False)
     print(f"Saved results to {results_path}")
-    
+
     # define PIT file path
-    pit_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-PIT_{time}-{description}.csv'
+    pit_path = VALIDATION / f'{resource}/{resource}_{method}_asset-PIT_{time}-{description}.csv'
 
     # load or create DataFrame
     pit_df =  _read_csv_safe(pit_path)
@@ -985,13 +865,13 @@ if RANK == 0:
     pit_['time'] = time
 
     pit_df = pd.concat([pit_df, pit_], axis = 0, ignore_index=True)
-    print(pit_df)
+    #print(pit_df)
 
     pit_df.to_csv(pit_path, index = False)
     print(f"Saved PIT to {pit_path}")
 
     # define stats file path
-    stat_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-STATS_{time}-{description}.csv'
+    stat_path = VALIDATION / f'{resource}/{resource}_{method}_asset-STATS_{time}-{description}.csv'
 
     # load or create DataFrame
     stat_df =  _read_csv_safe(stat_path)
@@ -1000,217 +880,316 @@ if RANK == 0:
     stat_['initialization'] = init
 
     stat_df = pd.concat([stat_df, stat_], axis = 0, ignore_index=True)
-    print(stat_df)
+    #print(stat_df)
 
     stat_df.to_csv(stat_path, index = False)
     print(f"Saved STAT to {stat_path}")
 
-    # define functions file path
-    func_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-functions_{time}-{description}.csv'
+    # define stats file path
+    func_path = VALIDATION / f'{resource}/{resource}_{method}_asset-funcions_{time}-{description}.csv'
 
     # load or create DataFrame
     func_df =  _read_csv_safe(func_path)
 
-    # save functions
+    # save stats
     func_['initialization'] = init
 
     func_df = pd.concat([func_df, func_], axis = 0, ignore_index=True)
-    print(func_df)
+    #print(stat_df)
 
     func_df.to_csv(func_path, index = False)
-    print(f"Saved FUNCTIONS to {func_path}")
+    print(f"Saved funcions to {func_path}")
 
-if RANK == 0:
+if (RANK == 0) and (ENVELOPE == True):
     print('----- ENVELOPE VALIDATION -----')
 
-local_results = _run_ffc_envelop_parallel_mpi(_data, _best_params, processes_val_, 
-                                              fractions_ = np.linspace(0.1, 0.9, 17),
-                                              alpha_ = [0.1, 0.2, 0.3, 0.4],
-                                              distances_ = ['MBD', 'l2', 'sup', 'fknn'],
-                                              time = time)
+prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
+    _data,
+    _best_hyper,
+    processes_val_,
+    fractions_ = np.linspace(0.1, 0.9, 17),
+    alpha_ = [0.1, 0.2, 0.3, 0.4],
+    distances_ = ['MBD', 'fknn'],
+    time = time
+)
 
 # Gather all local results
-results_ = COMM.gather(local_results, root=0)
+prob_results = COMM.gather(prob_local_results, root=0)
 
-if RANK == 0:
+if (RANK == 0) and (ENVELOPE == True):
 
     # Only root processes all gathered result
-    results_ = np.concatenate(results_, axis=0)
-    results_df = pd.DataFrame(results_, columns = ['time',
-                                                   'asset',
-                                                   'day',
-                                                   'alpha',
-                                                   'fraction',
-                                                   'distance',
-                                                   'n_scen',
-                                                   'n_scen_evenlop',
-                                                   'FIS',
-                                                   'FCS',
-                                                   'SCP'])
+    prob_results = pd.DataFrame(
+        np.concatenate(prob_results, axis=0), columns = [
+            'time',
+            'asset',
+            'day',
+            'alpha',
+            'fraction',
+            'distance',
+            'FIS',
+            'FCS',
+            'SCP'
+        ]
+    )
 
-    results_df['FIS'] = results_df['FIS'].astype(float)
-    results_df['FCS'] = results_df['FCS'].astype(float)
-    results_df['SCP'] = results_df['SCP'].astype(float)
-    results_df['alpha'] = results_df['alpha'].astype(float)
+    prob_results['FIS'] = prob_results['FIS'].astype(float)
+    prob_results['FCS'] = prob_results['FCS'].astype(float)
+    prob_results['SCP'] = prob_results['SCP'].astype(float)
 
-    agg_results = results_df.groupby(['time', 
-                                      'alpha', 
-                                      'distance', 
-                                      'fraction']).agg({'FIS': 'mean',
-                                                        'FCS': 'mean',
-                                                        'SCP': 'mean'}).reset_index(drop = False)
+    prob_results = prob_results.groupby(
+        ['time', 'alpha', 'distance', 'fraction']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+    ).reset_index(drop = False)
 
-    agg_results['FCS'] = (agg_results['FCS'] - (1 - agg_results['alpha']))**2            
-    agg_results['SCP'] = (agg_results['SCP'] - (1 - agg_results['alpha']))**2            
+    prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-    best_results_fis_ = agg_results.loc[agg_results.groupby(['time', 'alpha', 'distance'])['FIS'].idxmin()].reset_index(drop=True)
+    prob_results['FCS'] = (prob_results['FCS'] - (1 - prob_results['alpha']))**2
+    prob_results['SCP'] = (prob_results['SCP'] - (1 - prob_results['alpha']))**2
+
+    best_results_fis_ = prob_results.loc[prob_results.groupby(
+        ['time', 'alpha', 'distance']
+    )['FIS'].idxmin()].reset_index(drop=True)
+
     best_results_fis_ = best_results_fis_[['time', 'alpha', 'fraction', 'distance']]
     best_results_fis_['iteration'] = init
     best_results_fis_['score'] = 'FIS'
 
-    best_results_fcs_ = agg_results.loc[agg_results.groupby(['time', 'alpha', 'distance'])['FCS'].idxmin()].reset_index(drop=True)
+    best_results_fcs_ = prob_results.loc[prob_results.groupby(
+        ['time', 'alpha', 'distance']
+    )['FCS'].idxmin()].reset_index(drop=True)
+
     best_results_fcs_ = best_results_fcs_[['time', 'alpha', 'fraction', 'distance']]
     best_results_fcs_['iteration'] = init
     best_results_fcs_['score'] = 'FCS'
 
-    best_results_scp_ = agg_results.loc[agg_results.groupby(['time', 'alpha', 'distance'])['SCP'].idxmin()].reset_index(drop=True)
+    best_results_scp_ = prob_results.loc[prob_results.groupby(
+        ['time', 'alpha', 'distance']
+    )['SCP'].idxmin()].reset_index(drop=True)
+
     best_results_scp_ = best_results_scp_[['time', 'alpha', 'fraction', 'distance']]
     best_results_scp_['iteration'] = init
     best_results_scp_['score'] = 'SCP'
 
     best_results = pd.concat([best_results_fis_, best_results_fcs_, best_results_scp_], axis = 0).reset_index(drop=True)
-    print(best_results)
+    #print(best_results)
 
     # Overwrite the CSV with the updated data
-    # best_results.to_csv(path_to_validation + f'/{resource}/{resource}_{method}_asset-envelop-validation_{time}-{description}.csv', index = False)
+    # best_results.to_csv(VALIDATION / f'{resource}/{resource}_{method}_asset-envelop-validation_{time}-{description}.csv', index = False)
 
 COMM.Barrier()
 
 # Broadcast inputs (only needed if not already shared)
-if RANK == 0:
+if (RANK == 0) and (ENVELOPE == True):
     print('----- ENVELOPE TEST -----')
     best_results_shared = best_results
 else:
     best_results_shared = None
 
-# Broadcast envelop parameters
-best_results_shared = COMM.bcast(best_results_shared, root=0)
+if (ENVELOPE == True):
+    # Broadcast envelop parameters
+    best_results_shared = COMM.bcast(best_results_shared, root=0)
 
-for score in best_results_shared['score'].unique():
-    for distance in best_results_shared['distance'].unique():
+    for score in best_results_shared['score'].unique():
+        for distance in best_results_shared['distance'].unique():
 
-        k_ = best_results_shared.loc[
-            (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 
-            'fraction'].astype(float).tolist()
+            k_ = best_results_shared.loc[
+                (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 'fraction'
+            ].astype(float).tolist()
 
-        alpha_ = best_results_shared.loc[
-            (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 
-            'alpha'].astype(float).tolist()
+            alpha_ = best_results_shared.loc[
+                (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 'alpha'
+            ].astype(float).tolist()
 
-        local_results = _run_ffc_envelop_parallel_mpi(_data, _best_params, processes_test_, 
-                                                      distances_ = [distance],
-                                                      alpha_ = alpha_,
-                                                      k_ = k_,
-                                                      time = time)
+            prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
+                _data, _best_hyper, processes_test_,
+                distances_ = [distance],
+                alpha_ = alpha_,
+                k_ = k_,
+                time = time
+            )
 
-        # Gather all local results
-        results_ = COMM.gather(local_results, root=0)
+            # Gather all local results
+            prob_results = COMM.gather(prob_local_results, root=0)
+            det_results = COMM.gather(det_local_results, root=0)
 
-        if RANK == 0:
-            # Only root processes all gathered result
-            results_ = np.concatenate(results_, axis=0)
-            results_ = pd.DataFrame(results_, columns = ['time',
-                                                         'asset',
-                                                         'day',
-                                                         'alpha',
-                                                         'fraction',
-                                                         'distance',
-                                                         'n_scen',
-                                                         'n_scen_evenlop',
-                                                         'FIS',
-                                                         'FCS',
-                                                         'SCP'])
+            if RANK == 0:
+                # Only root processes all gathered result
+                prob_results = pd.DataFrame(
+                    np.concatenate(prob_results, axis=0), columns = [
+                        'time',
+                        'asset',
+                        'day',
+                        'alpha',
+                        'fraction',
+                        'distance',
+                        'FIS',
+                        'FCS',
+                        'SCP'
+                    ]
+                )
 
-            results_['FIS'] = results_['FIS'].astype(float)
-            results_['FCS'] = results_['FCS'].astype(float)
-            results_['SCP'] = results_['SCP'].astype(float)
-            results_['alpha'] = results_['alpha'].astype(float)
+                prob_results['FIS'] = prob_results['FIS'].astype(float)
+                prob_results['FCS'] = prob_results['FCS'].astype(float)
+                prob_results['SCP'] = prob_results['SCP'].astype(float)
+                prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-            results_ = results_.groupby(['time', 
-                                         'alpha']).agg({'FIS': 'mean',
-                                                        'FCS': 'mean',
-                                                        'SCP': 'mean'}).reset_index(drop = False)
-            
-            results_['score'] = score
-            results_['fraction'] = k_
-            results_['distance'] = distance
-            results_['iteration'] = init
+                prob_results = prob_results.groupby(
+                    ['time', 'alpha']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+                ).reset_index(drop = False)
 
-            # define envelop file path
-            results_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-envelope-{description}.csv'
+                prob_results['score'] = score
+                prob_results['fraction'] = k_
+                prob_results['distance'] = distance
+                prob_results['iteration'] = init
 
-            # load or create DataFrame
-            results_df =  _read_csv_safe(results_path)
+                # define envelop file path
+                results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-envelope-{description}.csv'
 
-            # append safely
-            results_df = pd.concat([results_df, results_], axis = 0, ignore_index=True)
-            print(results_df)
+                # load or create DataFrame
+                results_df = _read_csv_safe(results_path)
 
-            # save enevelop
-            results_df.to_csv(results_path, index=False)
-            print(f"Saved results to {results_path}")
+                # append safely
+                results_df = pd.concat([results_df, prob_results], axis = 0, ignore_index=True)
+                #print(results_df)
 
-k_ = [None, None, None, None]
-distance = 'ECDF'
-score = None
-local_results = _run_ffc_envelop_parallel_mpi(_data, _best_params, processes_test_, 
-                                              distances_ = [distance],
-                                              alpha_ = ALPHAS,
-                                              k_ = k_,
-                                              time = time)
+                # save enevelop
+                results_df.to_csv(results_path, index=False)
+                print(f"Saved results to {results_path}")
 
-# Gather all local results
-results_ = COMM.gather(local_results, root=0)
+                det_results = pd.DataFrame(
+                    np.concatenate(det_results, axis=0), columns = [
+                        'time',
+                        'asset',
+                        'day',
+                        'distance',
+                        'MSE',
+                        'MAE',
+                        'MBE'
+                    ]
+                )
 
-if RANK == 0:
+                det_results['MSE'] = det_results['MSE'].astype(float)
+                det_results['MAE'] = det_results['MAE'].astype(float)
+                det_results['MBE'] = det_results['MBE'].astype(float)
+
+                det_results = det_results.groupby(
+                    ['time']).agg({'MSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
+                ).reset_index(drop = False)
+
+                det_results['score'] = score
+                det_results['distance'] = distance
+                det_results['iteration'] = init
+
+                # define envelop file path
+                results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-error-{description}.csv'
+
+                # load or create DataFrame
+                results_df = _read_csv_safe(results_path)
+
+                # append safely
+                results_df = pd.concat([results_df, det_results], axis = 0, ignore_index=True)
+                #print(results_df)
+
+                # save enevelop
+                results_df.to_csv(results_path, index=False)
+                print(f"Saved results to {results_path}")
+
+    k_ = [None, None, None, None]
+    distance = 'ECDF'
+    score = None
+
+    prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
+        _data,
+        _best_hyper,
+        processes_test_,
+        distances_ = [distance],
+        alpha_ = ALPHAS,
+        k_ = k_,
+        time = time
+    )
+
+    # Gather all local results
+    prob_results = COMM.gather(prob_local_results, root=0)
+    det_results = COMM.gather(det_local_results, root=0)
+
+if (RANK == 0) and (ENVELOPE == True):
+
     # Only root processes all gathered result
-    results_ = np.concatenate(results_, axis=0)
-    results_ = pd.DataFrame(results_, columns = ['time',
-                                                 'asset',
-                                                 'day',
-                                                 'alpha',
-                                                 'fraction',
-                                                 'distance',
-                                                 'n_scen',
-                                                 'n_scen_evenlop',
-                                                 'FIS',
-                                                 'FCS', 
-                                                 'SCP'])
+    prob_results = pd.DataFrame(
+        np.concatenate(prob_results, axis=0), columns = [
+            'time',
+            'asset',
+            'day',
+            'alpha',
+            'fraction',
+            'distance',
+            'FIS',
+            'FCS',
+            'SCP'
+        ]
+    )
 
-    results_['FIS'] = results_['FIS'].astype(float)
-    results_['FCS'] = results_['FCS'].astype(float)
-    results_['SCP'] = results_['SCP'].astype(float)
-    results_['alpha'] = results_['alpha'].astype(float)
+    prob_results['FIS'] = prob_results['FIS'].astype(float)
+    prob_results['FCS'] = prob_results['FCS'].astype(float)
+    prob_results['SCP'] = prob_results['SCP'].astype(float)
+    prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-    results_ = results_.groupby(['time', 
-                                 'alpha']).agg({'FIS': 'mean',
-                                                'FCS': 'mean',
-                                                'SCP': 'mean'}).reset_index(drop = False)
-    
-    results_['score'] = score
-    results_['fraction'] = k_
-    results_['distance'] = distance
-    results_['iteration'] = init
+    prob_results = prob_results.groupby(
+        ['time', 'alpha']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+    ).reset_index(drop = False)
+
+    prob_results['score'] = score
+    prob_results['fraction'] = k_
+    prob_results['distance'] = distance
+    prob_results['iteration'] = init
 
     # define envelop file path
-    results_path = path_to_validation + f'/{resource}/{resource}_{method}_asset-envelope-{description}.csv'
+    results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-envelope-{description}.csv'
 
     # load or create DataFrame
     results_df =  _read_csv_safe(results_path)
 
     # append safely
-    results_df = pd.concat([results_df, results_], axis = 0, ignore_index=True)
-    print(results_df)
+    results_df = pd.concat([results_df, prob_results], axis = 0, ignore_index=True)
+    #print(results_df)
+
+    # save enevelop
+    results_df.to_csv(results_path, index=False)
+    print(f"Saved results to {results_path}")
+
+    det_results = pd.DataFrame(
+        np.concatenate(det_results, axis=0), columns = [
+            'time',
+            'asset',
+            'day',
+            'distance',
+            'MSE',
+            'MAE',
+            'MBE'
+        ]
+    )
+
+    det_results['MSE'] = det_results['MSE'].astype(float)
+    det_results['MAE'] = det_results['MAE'].astype(float)
+    det_results['MBE'] = det_results['MBE'].astype(float)
+
+    det_results = det_results.groupby(
+        ['time']).agg({'MSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
+    ).reset_index(drop = False)
+
+    det_results['score'] = score
+    det_results['distance'] = distance
+    det_results['iteration'] = init
+
+    # define envelop file path
+    results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-error-{description}.csv'
+
+    # load or create DataFrame
+    results_df =  _read_csv_safe(results_path)
+
+    # append safely
+    results_df = pd.concat([results_df, det_results], axis = 0, ignore_index=True)
+    #print(results_df)
 
     # save enevelop
     results_df.to_csv(results_path, index=False)
