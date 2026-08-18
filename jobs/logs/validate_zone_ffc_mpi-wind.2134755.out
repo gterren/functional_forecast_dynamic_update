@@ -1,0 +1,59 @@
+wind fusion 6 4 0.25 True unbiased-025-C1
+windwind fusion 6 4 0.25 True unbiased-025-C1
+[Process 6-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 9-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 0-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 1-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 2-12]
+[Process 3-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 4-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 7-12]
+wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 8-12]
+wind fusion 6 4 0.25 True unbiased-025-C1wind fusion 6 4 0.25 True unbiased-025-C1
+[Process 11-12]
+ fusion 6 4 0.25 True unbiased-025-C1
+
+[Process 10-12]
+[Process 5-12]
+[Resource wind][Method fusion][Horizon 6h][Initialization 4]
+----- HYPERPARAMETERS VALIDATION -----
+----- HYPERPARAMETERS TEST -----
+0.06855941474292249
+{'rho_e': 0.06840229619230526, 'rho_d': 0.04802042032831384, 'nu': 2, 'sigma': 0.20972999948492657}
+{'clique_order': 1, 'p_fusion': 1.0, 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200}
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-hyper-unbiased-025-C1.csv
+Saved PIT to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-PIT_6-unbiased-025-C1.csv
+Saved STAT to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-STATS_6-unbiased-025-C1.csv
+Saved FUNCTIONS to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-functions_6-unbiased-025-C1.csv
+----- ENVELOPE VALIDATION -----
+5 Panhandle-47-6 zero-size array to reduction operation maximum which has no identity
+6 Panhandle-42-6 zero-size array to reduction operation maximum which has no identity
+8 South-68-6 zero-size array to reduction operation maximum which has no identity
+----- ENVELOPE TEST -----
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+10 West-83-6 zero-size array to reduction operation maximum which has no identity
+2 North-88-6 zero-size array to reduction operation maximum which has no identity
+8 South-49-6 zero-size array to reduction operation maximum which has no identity
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+10 West-83-6 zero-size array to reduction operation maximum which has no identity
+2 North-88-6 zero-size array to reduction operation maximum which has no identity
+8 South-49-6 zero-size array to reduction operation maximum which has no identity
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv

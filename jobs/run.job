@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=validate_asset_ffc_mpi-solar
+#SBATCH --job-name=validate_zone_ffc_mpi-wind
 #SBATCH --time=24:00:00
 ##SBATCH --nodes=1
 #SBATCH --ntasks-per-node=12
@@ -20,9 +20,9 @@ cd /home/gterren/dynamic_update/functional_forecast_dynamic_update/scripts
 
 source activate fda
 
-#mpirun -np 12 python -u validate_zone_ffc_mpi.py wind fusion $1 $2 0.25 0 biased-025-C1
-#mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased-025
-mpirun -np 12 python -u validate_asset_ffc_mpi.py solar fusion $1 $2 0.25 1 unbiased-025
+mpirun -np 12 python -u validate_zone_ffc_mpi.py wind fusion $1 $2 0.25 0 biased-025-C0
+#mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 0 biased-025
+#mpirun -np 12 python -u validate_asset_ffc_mpi.py solar fusion $1 $2 0.25 1 unbiased-025
 
 # mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased-025-v30 disnance N kernel Y D fixed
 # mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased-025-v31 disnance Y kernel N D fixed

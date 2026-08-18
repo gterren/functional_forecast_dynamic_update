@@ -1,0 +1,50 @@
+wind fusion 18 1 0.25 True unbiased-025-C1
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 1-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 2-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 3-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 5-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 6-12]
+wind[Process 0-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 8-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 9-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 10-12]
+wind fusion 18 1 0.25 True unbiased-025-C1
+[Process 11-12]
+[Process 4-12]
+ fusion 18 1 0.25 True unbiased-025-C1
+[Process 7-12]
+[Resource wind][Method fusion][Horizon 18h][Initialization 1]
+----- HYPERPARAMETERS VALIDATION -----
+----- HYPERPARAMETERS TEST -----
+0.0653914585347374
+{'rho_e': 0.06774961236067503, 'rho_d': 0.002350883664864815, 'nu': 2, 'sigma': 0.34257807953522296}
+{'clique_order': 1, 'p_fusion': 1.0, 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200}
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-hyper-unbiased-025-C1.csv
+Saved PIT to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-PIT_18-unbiased-025-C1.csv
+Saved STAT to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-STATS_18-unbiased-025-C1.csv
+Saved FUNCTIONS to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-functions_18-unbiased-025-C1.csv
+----- ENVELOPE VALIDATION -----
+----- ENVELOPE TEST -----
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-envelope-unbiased-025-C1.csv
+Saved results to /home/gterren/dynamic_update/validation/wind/wind_fusion_zone-error-unbiased-025-C1.csv

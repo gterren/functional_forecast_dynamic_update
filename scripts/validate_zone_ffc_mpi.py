@@ -173,12 +173,17 @@ def _run_ffc_envelope(
         _depth = ModifiedBandDepth()
 
         results_ = []
+        det_rows_ = []
         for distance in distances_:
 
             if (distance == 'ECDF'):
 
                 # Confidence bands from marginal empirical density function
-                f_median_ext_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(M_hat_, alpha_)
+                f_median_ext_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(
+                    M_hat_, 
+                    _fdu.w_prime_, 
+                    alpha_
+                )
 
                 for alpha in alpha_:
                     FIS_ecdf = _interval_score(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'], alpha).mean()
@@ -186,19 +191,24 @@ def _run_ffc_envelope(
                     SCP_ecdf = _simultaneous_coverage(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'])
 
                     # Save results
-                    results_.append([time, region, day, alpha, M_hat_.shape[0], 'ECDF', M_hat_.shape[0], M_hat_.shape[0], FIS_ecdf, FCS_ecdf, SCP_ecdf])
+                    results_.append([time, region, day, alpha, 1, 'ECDF', FIS_ecdf, FCS_ecdf, SCP_ecdf])
 
                 # Point forecast used for the deterministic scores (same slicing as the bands above)
                 f_point_ = f_median_ext_
 
             # depth-based envelope
-            elif (distance == 'MBD'):
+            if (distance == 'MBD'):
 
                 for fraction in fractions_:
                     if fraction is not None:
                         k_ = [fraction, fraction, fraction, fraction]
 
-                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(_depth, M_hat_, alpha_, k_)
+                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(
+                        _depth, 
+                        M_hat_, 
+                        alpha_, 
+                        k_
+                    )
 
                     for alpha in alpha_:
                         FIS_depth = _interval_score(f_hat_, _lower_depth[f'{alpha}'], _upper_depth[f'{alpha}'], alpha).mean()
@@ -212,7 +222,7 @@ def _run_ffc_envelope(
                 f_point_ = f_deepest_
 
             # Focal curve envelope
-            elif (distance == 'fknn'):
+            if (distance == 'fknn'):
 
                 J_hat_ = _fdu.focal_curve_envelope(_depth, _fdu.M_ext_, distance, max_iter = 100)
 
@@ -220,7 +230,10 @@ def _run_ffc_envelope(
                     if fraction is not None:
                         k_ = [fraction, fraction, fraction, fraction]
 
-                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_bands(alpha_, k_)
+                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_bands(
+                        alpha_, 
+                        k_
+                    )
 
                     for alpha in alpha_:
                         FIS_focal = _interval_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:], alpha).mean()
@@ -232,16 +245,14 @@ def _run_ffc_envelope(
                 # Point forecast used for the deterministic scores (same slicing as the bands above)
                 f_point_ = f_focal_[1:]
 
-            else:
-                raise ValueError(f"Unknown distance: {distance}")
-
             #print(distance, f_point_.shape, f_hat_.shape)
             rmse = np.sqrt(np.mean((f_hat_ - f_point_)**2))
             mae = np.mean(np.absolute(f_hat_ - f_point_))
             mbe = np.mean(f_hat_ - f_point_)
+            det_rows_.append([time, region, day, distance, rmse, mae, mbe])
 
-            prob_results_ = np.stack(results_)
-            det_results_  = np.array([time, region, day, distance, rmse, mae, mbe])[np.newaxis, :]
+        prob_results_ = np.stack(results_)
+        det_results_  = np.array(det_rows_)
 
     except Exception as e:
         print(RANK, file_name, e)
@@ -618,19 +629,19 @@ print(f'[Process {RANK}-{SIZE}]')
 
 # Fixed parameters depending on interval for solar
 _fixed_hyper = {
-    6:  {'clique_order': 1, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
-    12: {'clique_order': 1, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
-    18: {'clique_order': 1, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
+    6:  {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
+    12: {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
+    18: {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
 }
 
 # Hyperparameter combinations
 _hyper = {
-    'rho_e':   [1e-5,  1000.,  'log'],   # λ_e / λ_f
-    'rho_d':   [1e-5,  1000.,  'log'],   # λ_d / λ_f
-    # 'tau':     [1e-5,  1000.,  'log'],   # temperature = 1 / λ_f
-    #'kappa':   [50,      500,  'linear'],
-    'nu':      [2,        24,  'linear'],
-    'sigma':   [0.,       1.,  'linear'],
+    'rho_e':          [1e-5, 1000.,  'log'],   # λ_e / λ_f
+    'rho_d':          [1e-5, 1000.,  'log'],   # λ_d / λ_f
+    #'tau':            [1e-5,  1000.,  'log'],   # temperature = 1 / λ_f
+    #'lookahead_rate': [1.,     24.,  'linear'],
+    'nu':             [2,      36,  'linear'],
+    'sigma':          [0.,      1.,  'linear'],
 }
 
 ## -------------------------- LOAD DATA ---------------------------------
@@ -836,7 +847,7 @@ if (ENVELOPE == True):
         _data,
         _best_params,
         processes_val_,
-        fractions_ = np.linspace(0.1, 0.9, 17),
+        fractions_ = np.linspace(0.1, 1., 19),
         alpha_ = [0.1, 0.2, 0.3, 0.4],
         distances_ = ['MBD', 'fknn'],
         time = time

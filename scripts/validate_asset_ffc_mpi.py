@@ -259,13 +259,19 @@ def _run_ffc_envelope(
         _depth = ModifiedBandDepth()
 
         results_ = []
+        det_rows_ = []
         for distance in distances_:
 
             # Empirical confidence bands
             if (distance == 'ECDF'):
 
                 # Confidence bands from marginal empirical density function
-                f_median_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(M_hat_, _fdu.w_prime_, alpha_)
+                f_median_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(
+                    M_hat_, 
+                    _fdu.w_prime_, 
+                    alpha_
+                )
+
                 f_median_ = f_median_[:, 0]
 
                 for alpha in alpha_:
@@ -285,7 +291,12 @@ def _run_ffc_envelope(
                     if fraction is not None:
                         k_ = [fraction, fraction, fraction, fraction]
 
-                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(_depth, M_hat_int_, alpha_, k_)
+                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(
+                        _depth, 
+                        M_hat_int_, 
+                        alpha_, 
+                        k_
+                    )
 
                     for alpha in alpha_:
                         FIS_depth = _interval_score(f_hat_, _lower_depth[f'{alpha}'][1:], _upper_depth[f'{alpha}'][1:], alpha).mean()
@@ -317,13 +328,14 @@ def _run_ffc_envelope(
 
                 f_ = f_focal_[1:]
 
-        #print(distance, f_.shape, f_hat_.shape)
-        rmse = np.sqrt(np.mean((f_hat_ - f_)**2))
-        mae = np.mean(np.absolute(f_hat_ - f_))
-        mbe = np.mean(f_hat_ - f_)
+            #print(distance, f_.shape, f_hat_.shape)
+            rmse = np.sqrt(np.mean((f_hat_ - f_)**2))
+            mae = np.mean(np.absolute(f_hat_ - f_))
+            mbe = np.mean(f_hat_ - f_)
+            det_rows_.append([time, asset, day, distance, rmse, mae, mbe])
 
         prob_results_ = np.stack(results_)
-        det_results_  = np.array([time, asset, day, distance, rmse, mae, mbe])[np.newaxis, :]
+        det_results_  = np.array(det_rows_)
 
     except Exception as e:
         print(RANK, file_name, e)
@@ -640,6 +652,7 @@ elif resource == 'solar':
     # Fixed parameters depending on interval for solar
     _fixed_hyper = {
         120: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        132: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
         144: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
         168: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
     }
@@ -650,7 +663,7 @@ elif resource == 'solar':
         'rho_d':   [1e-5,  1000.,  'log'],   # λ_d / λ_f
         #'tau':     [1e-5,  1000.,  'log'],   # temperature = 1 / λ_f
         'kappa_0': [150,   5000,   'log'],
-        'nu':      [1,     12,     'linear'],
+        'nu':      [2,     12,     'linear'],
         'sigma':   [0.,    1.,     'linear'],
     }
 
@@ -676,8 +689,8 @@ else:
     dx_,
 ) = loader.preprocessed_dataset(
     unbiased = unbiased,
-    path_to_training_data = DATA / "preprocessed_wind_2017.pkl",
-    path_to_testing_data = DATA / "preprocessed_wind_2018.pkl",
+    path_to_training_data = DATA / f"preprocessed_{resource}_2017.pkl",
+    path_to_testing_data = DATA / f"preprocessed_{resource}_2018.pkl",
     T = 288,
 )
 
@@ -691,8 +704,8 @@ else:
 
 E_tr_lin_, E_ts_lin_ = loader.processed_dataset(
     unbiased = unbiased,
-    path_to_training_data = DATA / "linear_preprocessed_wind_2017.pkl",
-    path_to_testing_data = DATA / "linear_preprocessed_wind_2018.pkl",
+    path_to_training_data = DATA / f"linear_preprocessed_{resource}_2017.pkl",
+    path_to_testing_data = DATA / f"linear_preprocessed_{resource}_2018.pkl",
     T = 288,
 )
 
@@ -700,8 +713,8 @@ E_tr_lin_, E_ts_lin_ = loader.processed_dataset(
 
 E_tr_biased_, E_ts_biased_ = loader.processed_dataset(
     unbiased = False,
-    path_to_training_data = DATA / "preprocessed_wind_2017.pkl",
-    path_to_testing_data = DATA / "preprocessed_wind_2018.pkl",
+    path_to_training_data = DATA / f"preprocessed_{resource}_2017.pkl",
+    path_to_testing_data = DATA / f"preprocessed_{resource}_2018.pkl",
     T = 288,
 )
 
@@ -886,7 +899,7 @@ if (RANK == 0) and (HYPERPARAMETERS == True):
     print(f"Saved STAT to {stat_path}")
 
     # define stats file path
-    func_path = VALIDATION / f'{resource}/{resource}_{method}_asset-funcions_{time}-{description}.csv'
+    func_path = VALIDATION / f'{resource}/{resource}_{method}_asset-functions_{time}-{description}.csv'
 
     # load or create DataFrame
     func_df =  _read_csv_safe(func_path)
@@ -898,7 +911,7 @@ if (RANK == 0) and (HYPERPARAMETERS == True):
     #print(stat_df)
 
     func_df.to_csv(func_path, index = False)
-    print(f"Saved funcions to {func_path}")
+    print(f"Saved functions to {func_path}")
 
 if (RANK == 0) and (ENVELOPE == True):
     print('----- ENVELOPE VALIDATION -----')
@@ -907,7 +920,7 @@ prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
     _data,
     _best_hyper,
     processes_val_,
-    fractions_ = np.linspace(0.1, 0.9, 17),
+    fractions_ = np.linspace(0.1, 1., 19),
     alpha_ = [0.1, 0.2, 0.3, 0.4],
     distances_ = ['MBD', 'fknn'],
     time = time
@@ -1062,18 +1075,18 @@ if (ENVELOPE == True):
                         'asset',
                         'day',
                         'distance',
-                        'MSE',
+                        'RMSE',
                         'MAE',
                         'MBE'
                     ]
                 )
 
-                det_results['MSE'] = det_results['MSE'].astype(float)
+                det_results['RMSE'] = det_results['RMSE'].astype(float)
                 det_results['MAE'] = det_results['MAE'].astype(float)
                 det_results['MBE'] = det_results['MBE'].astype(float)
 
                 det_results = det_results.groupby(
-                    ['time']).agg({'MSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
+                    ['time']).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
                 ).reset_index(drop = False)
 
                 det_results['score'] = score
@@ -1163,18 +1176,18 @@ if (RANK == 0) and (ENVELOPE == True):
             'asset',
             'day',
             'distance',
-            'MSE',
+            'RMSE',
             'MAE',
             'MBE'
         ]
     )
 
-    det_results['MSE'] = det_results['MSE'].astype(float)
+    det_results['RMSE'] = det_results['RMSE'].astype(float)
     det_results['MAE'] = det_results['MAE'].astype(float)
     det_results['MBE'] = det_results['MBE'].astype(float)
 
     det_results = det_results.groupby(
-        ['time']).agg({'MSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
+        ['time']).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
     ).reset_index(drop = False)
 
     det_results['score'] = score

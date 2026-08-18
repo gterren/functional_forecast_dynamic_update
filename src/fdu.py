@@ -311,7 +311,7 @@ class functional_dynamic_update:
                 if np.random.uniform(0., 1., size=1)[0] < pf:
                     M_[j, :] = F_[j, :]
                 else:
-                    M_[j, :] = F_[j, :] * (1. - eta_) + E_[j, :] * eta_   
+                    M_[j, :] = (F_[j, :] * (1. - eta_)) + (E_[j, :] * eta_)
                     #M_[j, :] = F_[j, :] * (1. - eta_) + e_ * eta_   
 
             else:
@@ -485,23 +485,23 @@ class functional_dynamic_update:
             
             self.d_d_ = None
 
-        # # w: partially observed curve similarity
-        # self.w_f_ = self._rbf_kernel(
-        #     self.d_f_, 
-        #     self.length_scale_f
-        # )
+        # w: partially observed curve similarity
+        self.w_f_ = self._rbf_kernel(
+            self.d_f_, 
+            self.length_scale_f
+        )
 
-        # # w: DA forecast similarity
-        # self.w_e_ = self._rbf_kernel(
-        #     self.d_e_, 
-        #     self.length_scale_e
-        # )
+        # w: DA forecast similarity
+        self.w_e_ = self._rbf_kernel(
+            self.d_e_, 
+            self.length_scale_e
+        )
 
-        # # w: Temporal similarity
-        # self.w_d_ = self._rbf_kernel(
-        #     self.d_d_, 
-        #     self.length_scale_d
-        # )
+        # w: Temporal similarity
+        self.w_d_ = self._rbf_kernel(
+            self.d_d_, 
+            self.length_scale_d
+        )
 
         # # Functional Neighborhood
         # self.w_fed_ = np.min(
@@ -532,33 +532,34 @@ class functional_dynamic_update:
                 self.length_scale_d * self.d_d_,
             ]), axis = 0
         )
+        self.arg_fed_ = np.argmax(
+            np.stack([
+                self.length_scale_f * self.d_f_,
+                self.length_scale_e * self.d_e_,
+                self.length_scale_d * self.d_d_,
+            ]), axis = 0
+        )
 
-        # linear-scale weights, rescaled so nearest neighbor = 1 (for inspection/xi)
-        self.w_fed_ = np.exp(self.log_w_fed_ - self.log_w_fed_.max())
-
-        self.idx_fed_ = np.argsort(self.log_w_fed_)[::-1][:self.kappa_0]
-
-        # spatial: Euclidean spatial distance between samples
-        if self._distances['spatial'] == 'euclidean':
+        # # spatial: Euclidean spatial distance between samples
+        # if self._distances['spatial'] == 'euclidean':
             
-            self.d_x_ = self._weighted_euclidian_dist(
-                self.X_[self.idx_fed_, :], self.x_
-            )
+        #     self.d_x_ = self._weighted_euclidian_dist(
+        #         self.X_[self.idx_fed_, :], self.x_
+        #     )
             
-        # spatial: Haversine spatial distance between samples
-        elif self._distances['spatial'] == 'haversine':
+        # # spatial: Haversine spatial distance between samples
+        # elif self._distances['spatial'] == 'haversine':
             
-            self.d_x_ = self._haversine_dist(
-                self.X_[self.idx_fed_, :], self.x_
-            )
+        #     self.d_x_ = self._haversine_dist(
+        #         self.X_[self.idx_fed_, :], self.x_
+        #     )
             
-        # spatial: Graph spatial distance between samples
-        elif self._distances['spatial'] == 'graph':
+        # # spatial: Graph spatial distance between samples
+        # elif self._distances['spatial'] == 'graph':
+        #     self.d_x_ = self._graph_dist(self.X_[self.idx_fed_, 1])
             
-            self.d_x_ = self._graph_dist(self.X_[self.idx_fed_, 1])
-            
-        else:
-            self.d_x = None
+        # else:
+        #     self.d_x = None
 
         # # w: Spatial similarity
         # self.w_x_ = self._rbf_kernel(
@@ -590,22 +591,65 @@ class functional_dynamic_update:
         # self.t_max = self.t_[self.idx_fed_].max()
         # self.t_min = self.t_[self.idx_fed_].min()
 
-        self.idx_x_local_ = np.lexsort(
-            (-self.log_w_fed_[self.idx_fed_], self.d_x_)
-        )[:self.kappa]
+        if (self._distances['spatial'] == 'haversine'):
 
-        # map local positions (within idx_fed_) back to global sample indices
-        self.idx_x_ = self.idx_fed_[self.idx_x_local_]
+            # linear-scale weights, rescaled so nearest neighbor = 1 (for inspection/xi)
+            self.w_fed_ = np.exp(self.log_w_fed_ - self.log_w_fed_.max())
+            self.idx_fed_ = np.argsort(self.log_w_fed_)[::-1][:self.kappa_0]
+       
+            self.d_x_ = self._haversine_dist(
+                self.X_[self.idx_fed_, :], self.x_
+            )
 
-        lw_ = self.log_w_fed_[self.idx_x_]
-        self.w_prime_  = np.exp(lw_ - lw_.max())
-        self.w_prime_ /= self.w_prime_.sum()
-
-        self.xi = self.log_w_fed_[self.idx_fed_].min() - self.log_w_fed_.max()   # log relative similarity, 0 = best
-        self.r = self.d_x_[self.idx_x_local_].max()
-        self.t_max = self.t_[self.idx_fed_].max()
-        self.t_min = self.t_[self.idx_fed_].min()
-        self.t_min = self.t_[self.idx_fed_].min()
+            self.idx_x_local_ = np.lexsort(
+                (-self.log_w_fed_[self.idx_fed_], self.d_x_)
+            )[:self.kappa]
+    
+            # map local positions (within idx_fed_) back to global sample indices
+            self.idx_x_ = self.idx_fed_[self.idx_x_local_]
+    
+            lw_ = self.log_w_fed_[self.idx_x_]
+            self.w_prime_  = np.exp(lw_ - lw_.max())
+            self.w_prime_ /= self.w_prime_.sum()
+    
+    
+            self.xi = self.log_w_fed_[self.idx_fed_].min() - self.log_w_fed_.max()   # log relative similarity, 0 = best
+            self.r = self.d_x_[self.idx_x_local_].max()
+            self.t_max = self.t_[self.idx_fed_].max()
+            self.d_max = self.d_d_[self.idx_fed_].max()
+            
+        elif (self._distances['spatial'] == 'graph'):
+            # linear-scale weights, rescaled so nearest neighbor = 1 (for inspection/xi)
+            self.w_fed_ = np.exp(self.log_w_fed_ - self.log_w_fed_.max())
+        
+            # Stage I (spatial FIRST): graph distance from the target node to every
+            # sample's asset; keep only samples within the clique-order threshold
+            self.d_x_ = self._graph_dist(self.X_[:, 1])
+            idx_clique_ = np.where(self.d_x_ <= self.clique_order)[0]
+        
+            # Stage II: within the clique, rank by fed similarity and keep kappa_0
+            order_ = np.argsort(self.log_w_fed_[idx_clique_])[::-1]
+            self.idx_fed_ = idx_clique_[order_[:self.kappa_0]]
+        
+            # analog set: kappa best by fed weight, ties broken by graph distance
+            # (lexsort: last key is primary — flipped w.r.t. the haversine branch,
+            # since graph distances are discrete and produce many ties)
+            self.idx_x_local_ = np.lexsort(
+                (self.d_x_[self.idx_fed_], -self.log_w_fed_[self.idx_fed_])
+            )[:self.kappa]
+        
+            # map local positions (within idx_fed_) back to global sample indices
+            self.idx_x_ = self.idx_fed_[self.idx_x_local_]
+        
+            lw_ = self.log_w_fed_[self.idx_x_]
+            self.w_prime_  = np.exp(lw_ - lw_.max())
+            self.w_prime_ /= self.w_prime_.sum()
+        
+            # diagnostics, mirroring the haversine branch
+            self.xi    = self.log_w_fed_[self.idx_fed_].min() - self.log_w_fed_.max()
+            self.r     = self.d_x_[self.idx_x_].max()          # max clique order used
+            self.t_max = self.t_[self.idx_fed_].max()
+            self.d_max = self.d_d_[self.idx_fed_].max()
 
         # Fuse neighboring curves with DA forecasts
         self.M_, self.m_0_ = self._fuse_curves(
@@ -637,7 +681,7 @@ class functional_dynamic_update:
     def functional_downsampling(
         self, 
         subsample, 
-        n_basis = 20
+        n_basis = 16
     ):
 
         dt_ = self.dt_
@@ -1071,8 +1115,9 @@ class functional_dynamic_update:
         _KDS = []
         weights /= weights.sum()
         for i in range(M_.shape[1]):
+            h = self._weighted_silverman_bandwidth(M_[:, i], weights)
             _KD = KernelDensity(
-                bandwidth = self._weighted_silverman_bandwidth(M_[:, i], weights), 
+                bandwidth = h + 0.01, 
                 algorithm = algorithm, 
                 kernel = kernel
             ).fit(M_[:, i][:, np.newaxis], weights[:, np.newaxis])
