@@ -106,139 +106,263 @@ def hyperparameters(_inits,
     envelope_df = envelope_df.set_index("time")
 
     return hyper_df, envelope_df
-    
-def _get_envelope_table(_init, hyper_, envelope_, score, PATH,
-        alphas = [0.1, 0.2]
+
+def error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    PATH,
     ):
+    
+    file_name = f'{resource}_{method}_{aggregation}-error-{exp_description}.csv'
+    error_ = pd.read_csv(PATH / f"{resource}/{file_name}")
         
-    envelope_ = envelope_.reset_index(drop = False)
-    times = np.array(hyper_.columns)
-
-    envelope_ = pd.concat(
-        [envelope_.loc[envelope_['alpha'] == alpha] 
-         for alpha in alphas], axis = 0
+    error_df = []
+    for interval in _init:
+        idx = (error_['time'] == interval) & (error_['iteration'] == _init[interval])
+        error_df.append(error_.loc[idx])
+    
+    error_df = pd.concat(
+        error_df, axis = 0
+    ).reset_index(drop = True)
+    
+    error_df = error_df.groupby(
+        ['time', 'distance']
+    ).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}).reset_index(drop = False)
+    
+    # map raw method names to publication-ready labels
+    df_fmt = (
+        error_df
+        .assign(distance=error_df['distance'].map({'MBD': r'$\hat{\mu}_{deep}(s)$','fknn': r'$\hat{\mu}_{focal}(s)$'}))
+        .rename(columns={'time': r'Forecast Update Time $\tau$', 'distance': 'Estimator'})
+        .rename(columns={'RMSE': 'RMSE', 'MAE': 'MAE', 'MBE': 'MBE'})
+        .round({'RMSE': 4, 'MAE': 4, 'MBE': 4})
     )
-
-    fraction_table_ = (
-        envelope_
-        .pivot_table(
-            index=["alpha", "distance"],
-            columns="time",
-            values="fraction",
-            aggfunc="mean"
+    
+    latex = (
+        df_fmt
+        .set_index([r'Forecast Update Time $\tau$', 'Estimator'])
+        .style
+        .format(precision=4)          # replaces float_format='%.4f'
+        .to_latex(
+            column_format='clccc',
+            caption='Forecast error metrics by lead time and distance method.',
+            label='tab:error_metrics',
+            hrules=True,               # keeps \toprule/\midrule/\bottomrule
+            multirow_align='c',        # replaces multirow=True
         )
-        .reset_index()
     )
 
-    fraction_table_.columns.name = None
+    # print(latex)
+    return df_fmt, latex
+ 
+def envelope_scores(df, alphas = [0.1, 0.2]):
+ 
+    METRICS = ["FIS", "FCS", "SCP"]
+    DISTANCES = ["MBD", "fknn", "ECDF"]
 
-    # --------------------------------------------------
-    # 2. Add ECDF rows for scores only.
-    #    ECDF has no fraction, so time columns remain empty.
-    # --------------------------------------------------
-    ecdf_ = envelope_.loc[envelope_["distance"] == "ECDF"].copy()
+    df = df.reset_index(drop = False)
+    df = df[df["alpha"].round(1).isin([round(a, 1) for a in alphas])]
+    df["fraction"] = df["fraction"].round(2)
+    df["alpha"] = df["alpha"].round(1)
+    df["FIS"] = df["FIS"].round(3)
+    df["FCS"] = df["FCS"].round(3)
+    df["SCP"] = df["SCP"].round(3)
 
-    score_rows_ = pd.concat(
+    # scores achieved when selected by the same criterion as the score,
+    # together with the selected fraction
+    matched = pd.concat(
         [
-            envelope_[["time", "alpha", "distance", "FCS", "FIS", "SCP"]],
-            ecdf_[["time", "alpha", "distance", "FCS", "FIS", "SCP"]]
-        ], axis=0, ignore_index=True
+            df.loc[df["score"] == m,
+                   ["time", "alpha", "distance", m, "fraction"]]
+            .rename(columns={m: "value"})
+            .assign(metric=m)
+            for m in METRICS
+        ],
+        ignore_index=True,
     )
-
-    avg_scores_ = (
-        score_rows_
-        .groupby(["alpha", "distance"], as_index=False)
-        .agg({
-            "FCS": "mean",
-            "FIS": "mean",
-            "SCP": "mean"
-        })
+ 
+    # ECDF baseline: its FIS/FCS/SCP values for each (time, alpha);
+    # no selection step, hence no fraction
+    ecdf = (
+        df.loc[df["distance"] == "ECDF", ["time", "alpha"] + METRICS]
+        .melt(id_vars=["time", "alpha"], var_name="metric", value_name="value")
+        .assign(distance="ECDF")
     )
-
-    # Use avg_scores_ as the base so ECDF rows are preserved
-    summary_ = (
-        avg_scores_
-        .merge(fraction_table_, on=["alpha", "distance"], how="left")
+ 
+    df_fmt = (
+        pd.concat([matched, ecdf], ignore_index=True)
+        .pivot_table(index=["time", "alpha"],
+                     columns=["metric", "distance"],
+                     values=["value", "fraction"])
+        .rename(columns={"value": "score", "fraction": "frac"}, level=0)
+        .reorder_levels([1, 2, 0], axis=1)  # (metric, distance, field)
     )
-
-    # Put time columns before score columns
-    summary_ = summary_[
-        ["alpha", "distance"] + list(times) + ["FCS", "FIS", "SCP"]
+    # fixed column order: score then frac per distance; ECDF has no frac
+    cols = [
+        (m, d, f)
+        for m in METRICS
+        for d in DISTANCES
+        for f in (["score"] if d == "ECDF" else ["score", "frac"])
+        if (m, d, f) in df_fmt.columns
     ]
+    df_fmt = df_fmt[cols]
+    df_fmt.columns.names = [" ", " ", None]
 
-    summary_ = summary_.round(2)
+    # print(envelope_.reset_index(drop = False))
+    #df_fmt = build_table(envelope_.reset_index(drop = False))
 
-    # Set row index for LaTeX
-    summary_ = summary_.set_index(["alpha", "distance"])
+    latex = (
+        df_fmt.astype(str) 
+        .style
+        #.format(precision=4)
+        .format_index(lambda v: f'{v:g}', level='alpha')   # trims trailing zeros: 0.1, 0.2, not 0.100000
+        .to_latex(
+            column_format='cl' + 'c' * df_fmt.shape[1],
+            caption='Forecast error metrics by update time and estimator.',
+            label='tab:error_metrics',
+            hrules=True,             # adds \toprule/\midrule/\bottomrule (old to_latex did this by default)
+            multirow_align='c',      # replaces multirow=True (sparse_index=True is already the default)
+            multicol_align='c',      # replaces multicolumn=True + multicolumn_format='c'
+        )
+    )
+    #print(latex)
+    return df_fmt, latex
 
-    summary_.index.names = [
-        r"$\boldsymbol{\alpha}$",
-        r"\textbf{Method}"
-    ]
-
-    # MultiIndex columns
-    time_cols = [(r"\textbf{Time}", t) for t in times]
-    score_cols = [
-        (r"\textbf{Score}", "FCS"),
-        (r"\textbf{Score}", "FIS"),
-        (r"\textbf{Score}", "SCP")
-    ]
-
-    summary_.columns = pd.MultiIndex.from_tuples(time_cols + score_cols)
-
-    return summary_
-
-
-def envelope_table(
-    _init, hyper_, envelope_, path_to_validation
-    ):
+# def _get_envelope_table(_init, hyper_, envelope_, PATH,
+#         alphas = [0.1, 0.2]
+#     ):
         
-    FCS_ = _get_envelope_table(
-        _init,
-        hyper_, 
-        envelope_, 
-        score = 'FCS',
-        PATH = path_to_validation,
-    )
+#     envelope_ = envelope_.reset_index(drop = False)
+#     times = np.array(hyper_.columns)
+
+#     envelope_ = pd.concat(
+#         [envelope_.loc[envelope_['alpha'] == alpha] 
+#          for alpha in alphas], axis = 0
+#     )
+
+#     fraction_table_ = (
+#         envelope_
+#         .pivot_table(
+#             index=["alpha", "distance"],
+#             columns="time",
+#             values="fraction",
+#             aggfunc="mean"
+#         )
+#         .reset_index()
+#     )
+
+#     fraction_table_.columns.name = None
+
+#     # --------------------------------------------------
+#     # 2. Add ECDF rows for scores only.
+#     #    ECDF has no fraction, so time columns remain empty.
+#     # --------------------------------------------------
+#     ecdf_ = envelope_.loc[envelope_["distance"] == "ECDF"].copy()
+
+#     score_rows_ = pd.concat(
+#         [
+#             envelope_[["time", "alpha", "distance", "FCS", "FIS", "SCP"]],
+#             ecdf_[["time", "alpha", "distance", "FCS", "FIS", "SCP"]]
+#         ], axis=0, ignore_index=True
+#     )
+
+#     avg_scores_ = (
+#         score_rows_
+#         .groupby(["alpha", "distance"], as_index=False)
+#         .agg({
+#             "FCS": "mean",
+#             "FIS": "mean",
+#             "SCP": "mean"
+#         })
+#     )
+
+#     # Use avg_scores_ as the base so ECDF rows are preserved
+#     summary_ = (
+#         avg_scores_
+#         .merge(fraction_table_, on=["alpha", "distance"], how="left")
+#     )
+
+#     # Put time columns before score columns
+#     summary_ = summary_[
+#         ["alpha", "distance"] + list(times) + ["FCS", "FIS", "SCP"]
+#     ]
+
+#     summary_ = summary_.round(2)
+
+#     # Set row index for LaTeX
+#     summary_ = summary_.set_index(["alpha", "distance"])
+
+#     summary_.index.names = [
+#         r"$\boldsymbol{\alpha}$",
+#         r"\textbf{Method}"
+#     ]
+
+#     # MultiIndex columns
+#     time_cols = [(r"\textbf{Time}", t) for t in times]
+#     score_cols = [
+#         (r"\textbf{Score}", "FCS"),
+#         (r"\textbf{Score}", "FIS"),
+#         (r"\textbf{Score}", "SCP")
+#     ]
+
+#     summary_.columns = pd.MultiIndex.from_tuples(time_cols + score_cols)
+
+#     return summary_
+
+
+# def envelope_table(
+#     _init, hyper_, envelope_, path_to_validation
+#     ):
+        
+#     FCS_ = _get_envelope_table(
+#         _init,
+#         hyper_, 
+#         envelope_, 
+#         score = 'FCS',
+#         PATH = path_to_validation,
+#     )
     
-    FIS_ = _get_envelope_table(
-        _init,
-        hyper_, 
-        envelope_, 
-        score = 'FIS',
-        PATH = path_to_validation,
-    )
+#     FIS_ = _get_envelope_table(
+#         _init,
+#         hyper_, 
+#         envelope_, 
+#         score = 'FIS',
+#         PATH = path_to_validation,
+#     )
     
-    # Add top-level criterion headers
-    FIS_.columns = pd.MultiIndex.from_tuples(
-        [(r'\textbf{FIS criterion}', *col) 
-         for col in FIS_.columns]
-    )
+#     # Add top-level criterion headers
+#     FIS_.columns = pd.MultiIndex.from_tuples(
+#         [(r'\textbf{FIS criterion}', *col) 
+#          for col in FIS_.columns]
+#     )
     
-    FCS_.columns = pd.MultiIndex.from_tuples(
-        [(r'\textbf{FCS criterion}', *col) 
-         for col in FCS_.columns]
-    )
+#     FCS_.columns = pd.MultiIndex.from_tuples(
+#         [(r'\textbf{FCS criterion}', *col) 
+#          for col in FCS_.columns]
+#     )
     
-    # Concatenate tables to the right
-    summary_ = pd.concat([FIS_, FCS_], axis=1)
-    # print(summary_)
+#     # Concatenate tables to the right
+#     summary_ = pd.concat([FIS_, FCS_], axis=1)
+#     # print(summary_)
     
-    # Generate latex code
-    latex_ = summary_.to_latex(
-        float_format="%.2f",
-        multirow=True,
-        multicolumn=True,
-        column_format="l|l|ccc|ccc|ccc|ccc",
-        escape=False
-    )
+#     # Generate latex code
+#     latex_ = summary_.to_latex(
+#         float_format="%.2f",
+#         multirow=True,
+#         multicolumn=True,
+#         column_format="l|l|ccc|ccc|ccc|ccc",
+#         escape=False
+#     )
     
-    latex_ = latex_.replace('l2', r'$\ell_2$')
-    latex_ = latex_.replace('F', r'')
-    latex_ = latex_.replace('fknn', r'$\omega_i (f_\star, e_\star)$')
-    latex_ = latex_.replace('sup', r'$\sup$')
+#     latex_ = latex_.replace('l2', r'$\ell_2$')
+#     latex_ = latex_.replace('F', r'')
+#     latex_ = latex_.replace('fknn', r'$\omega_i (f_\star, e_\star)$')
+#     latex_ = latex_.replace('sup', r'$\sup$')
     
-    return summary_, latex_
+#     return summary_, latex_
 
 ## LOAD BIASED DATA
 def preprocessed_dataset(unbiased, 
@@ -522,7 +646,7 @@ def processed_zone_dataset(zone,
             X_tr_, X_ts_, 
             dt_, regions_, region)
 
-def get_stats(
+def get_asset_stats(
     _init, 
     resource, 
     method, 
@@ -595,6 +719,73 @@ def get_stats(
 
     return stats_, funcs_
 
+def get_zone_stats(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description, 
+    T, 
+    PATH, 
+    agg="max",
+    ):
+    
+    """
+    Load STATS files for each interval, select the optimal initialization,
+    aggregate across horizon columns, and merge all intervals by region/day.
+
+    agg options: "max", "mean", "median"
+    """
+    agg_funcs = {"max": np.max,
+                 "mean": np.mean,
+                 "median": np.median}
+
+    stats_list_ = []
+    funcs_list_ = []
+    for interval in _init:
+        
+        stats_ = pd.read_csv(
+            PATH / f"{resource}/{resource}_{method}_{aggregation}-STATS_{interval}-{exp_description}.csv"
+        )
+
+        funcs_ = pd.read_csv(
+            PATH / f"{resource}/{resource}_{method}_{aggregation}-functions_{interval}-{exp_description}.csv"
+        )
+        
+        stats_ = stats_.loc[
+            stats_["initialization"] == _init[interval]
+        ].reset_index(drop=True)
+
+        funcs_ = funcs_.loc[
+            (funcs_["initialization"] == _init[interval]) & 
+            (funcs_["type"] == "median")
+        ].reset_index(drop=True)
+        
+        # Aggregate over the first T - interval columns
+        stats_[interval] = agg_funcs[agg](
+            stats_[stats_.columns[:T]].to_numpy(), axis=1
+        )
+        
+        # Aggregate over the first T - interval columns
+        funcs_[interval] = agg_funcs[agg](
+            funcs_[funcs_.columns[:T]].to_numpy(), axis=1
+        )
+        
+        stats_ = stats_[["region", "day", interval]].copy()
+        funcs_ = funcs_[["region", "day", interval]].copy()
+
+        stats_list_.append(stats_)
+        funcs_list_.append(funcs_)
+
+    stats_ = stats_list_[0]
+    funcs_ = funcs_list_[0]
+
+    for df_stats_, df_funcs_ in zip(stats_list_[1:], funcs_list_[1:]):
+        stats_ = stats_.merge(df_stats_, on=["region", "day"], how="left")
+        funcs_ = funcs_.merge(df_funcs_, on=["region", "day"], how="left")
+
+    return stats_, funcs_
+    
 # ## LOAD UNBIASED DATA
 # # Load 2017 data as training set
 # with open(path_to_data + f"/preprocessed_{resource}_2017.pkl", 'rb') as f:

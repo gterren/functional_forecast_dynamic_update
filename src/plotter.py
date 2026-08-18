@@ -245,6 +245,7 @@ def plot_updates(
     range_=[],
     legend_1=True,
     legend_2=False,
+    colorbar_pos = [150, 75, 150, 5],
 ):
 
     tau_ = dt_[:interval]
@@ -338,7 +339,7 @@ def plot_updates(
 
     cbar = _fig.colorbar(
         cm.ScalarMappable(_norm, _cmap),
-        cax=_ax.inset_axes([150, 75, 150, 5], transform=_ax.transData),
+        cax=_ax.inset_axes(colorbar_pos, transform=_ax.transData),
         orientation="horizontal",
     )
 
@@ -565,7 +566,7 @@ def plot_forecasts(
 
 def plot_envelope(
     _fig, _ax, palette_, _upper, _lower, m_, f_, f_hat_, 
-    e_, dx_, dt_, interval, color, label,
+    e_, dx_, dt_, interval, color_med, label,
     CR = 'CR',
     range_ = [],
     n = 120,
@@ -615,15 +616,6 @@ def plot_envelope(
         zorder = 8
     )
     
-    _ax.plot(
-        s_, 
-        100*m_[1:], 
-        c = color, 
-        label = label if legend_2 else None,
-        lw = 2, 
-        zorder = 10
-    )
-    
     colors_ = ["lightgray", "darkgray", "gray", "dimgray"]
     for color, key, i in zip(
         colors_, 
@@ -649,7 +641,16 @@ def plot_envelope(
         color = "lightgray",
         alpha = 0.5
     )
-    
+
+    _ax.plot(
+        s_, 
+        100*m_[1:], 
+        c = color_med, 
+        label = label if legend_2 else None,
+        lw = 2, 
+        zorder = 10
+    )
+
     idx_ = (dt_ % n) == 0
     idx_[1] = False
     idx_[-1] = False
@@ -661,7 +662,8 @@ def plot_envelope(
     #_ax.set_xlim(dt_[0], dt_[-1])
     _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
 
-    _ax.set_ylabel("Capacity Factor (%)", size = 14)
+    _ax.set_ylabel("Capacity Factor (%)", 
+                   size = 14)
 
 def plot_forecast_parameters(
     _fig, _ax, palette_, phi_, psi_, eta_, f_, 
@@ -773,7 +775,8 @@ def plot_depth(
     e_, w_, dx_, dt_, interval,
     range_ = [],
     n = 120,
-    colorbar = True
+    colorbar = True,
+    colorbar_pos = [285, 75, 150, 5],
 ):
 
     dt = dt_[1] - dt_[0]
@@ -859,7 +862,7 @@ def plot_depth(
         cbar = _fig.colorbar(
             cm.ScalarMappable(_norm, 
                               sns.color_palette("rocket_r", as_cmap = True)),
-            cax= _ax.inset_axes([500, 75, 150, 5], transform = _ax.transData),
+            cax= _ax.inset_axes(colorbar_pos, transform = _ax.transData),
             orientation = "horizontal"
         )
     
@@ -1087,22 +1090,22 @@ def plot_density_heatmap(
         zorder = 11
     )
     
-    _ax.plot(
-        s_, 
-        100*f_deepest_[1:], 
-        c = palette_.loc[2, "ibm"], 
-        label = r"$\hat{\mu}_{deep} (s)$" if legend_2 else None,
-        lw = 2, 
-        zorder = 10
-    )
+    # _ax.plot(
+    #     s_, 
+    #     100*f_deepest_[1:], 
+    #     c = palette_.loc[2, "ibm"], 
+    #     label = r"$\hat{\mu}_{deep} (s)$" if legend_2 else None,
+    #     lw = 2, 
+    #     zorder = 10
+    # )
     
-    _ax.plot(
-        s_, 100*f_deepest_[1:], 
-        c = 'k', 
-        lw = .25, 
-        alpha = 0.5,
-        zorder = 11
-    )
+    # _ax.plot(
+    #     s_, 100*f_deepest_[1:], 
+    #     c = 'k', 
+    #     lw = .25, 
+    #     alpha = 0.5,
+    #     zorder = 11
+    # )
     
     _ax.plot(
         s_, 
@@ -1147,7 +1150,7 @@ def plot_density_heatmap(
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(cmap=_cmap),
-            cax = _ax.inset_axes([50, 75, 150, 5], transform=_ax.transData),
+            cax = _ax.inset_axes([285, 75, 150, 5], transform=_ax.transData),
             orientation = "horizontal",
             extend = "max")
     
@@ -1402,15 +1405,15 @@ def plot_dynamic_update(
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(_norm, _cmap),
-            cax=_ax.inset_axes([650, 75, 150, 5], transform=_ax.transData),
+            cax=_ax.inset_axes([700, 17.5, 150, 5], transform=_ax.transData),
             orientation="horizontal",
         )
 
-        cbar.set_ticks([0, len(F_curves_)], labels=["1:00", "23:00"], size=12)
+        cbar.set_ticks([0, len(F_curves_)], labels=["7:00", "18:00"], size=12)
 
         # cbar.ax.tick_params(length=0)
 
-        cbar.ax.set_title("Event (update)", rotation=0, size=12)
+        cbar.ax.set_title(r"Forecast Update Time $\tau$", rotation=0, size=12)
 
 
 
@@ -2489,16 +2492,18 @@ def plot_pit(_fig, _ax, u_,
         patch.set_facecolor('lightgray')
 
     # --- Reference line ---
-    _ax.axhline(1.0, 
-                c = 'k',
-                linestyle='--')
+    _ax.axhline(
+        1.0, 
+        c = 'k',
+        linestyle='--'
+    )
 
     _ax.set_xlim(0, 1)
     _ax.set_ylim(0, 3)
 
     #_ax.set_xlabel("u = F̂(y_obs)")
-    _ax.set_xlabel(xlabel, size=14)
-    _ax.set_ylabel("Density", size=14)
+    _ax.set_xlabel(xlabel, size=12)
+    _ax.set_ylabel("Density", size=12)
 
     _ax.xaxis.set_major_formatter(FuncFormatter(_clean_fmt))
 
