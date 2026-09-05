@@ -33,7 +33,6 @@ def plot_histogram_cuts(
     _fig, 
     _ax, 
     palette_, 
-    WKDs_, 
     KDs_, 
     M_, 
     f_, 
@@ -51,7 +50,6 @@ def plot_histogram_cuts(
     x_ = np.linspace(0, 100, 1000)[:, np.newaxis]
 
     for slice, i in zip(slices_, range(len(slices_))):
-        z_ = np.exp(WKDs_[slice].score_samples(x_))
         w_ = np.exp(KDs_[slice].score_samples(x_))
 
         _ax[i].axvline(
@@ -84,20 +82,20 @@ def plot_histogram_cuts(
         )
 
         _ax[i].plot(
-            x_, z_, 
+            x_, w_, 
             label="WKDE (update)", 
             color=palette_.loc[1, "ibm"], 
             lw=1.25, 
             zorder=9
         )
 
-        _ax[i].plot(
-            x_, w_, 
-            label="KDE (update)", 
-            color='#006a50', 
-            lw=1.25, 
-            zorder=9
-        )
+        # _ax[i].plot(
+        #     x_, w_, 
+        #     label="KDE (update)", 
+        #     color='#006a50', 
+        #     lw=1.25, 
+        #     zorder=9
+        # )
 
         _ax[i].set_title(dx_[interval - 1:][slice], size=12)
         _ax[i].set_xlim(0, 100)
@@ -1044,12 +1042,14 @@ def plot_enhanced_functional_boxplot(
         keys_, 
         range(len(keys_))
     ):
+
         u_ = _upper[key]
         l_ = _lower[key]
+
         cr = int((1. - float(key)) * 100)
-        
+
         _ax.fill_between(
-            dt_[-u_.shape[0]:], 100*u_, 100*l_,
+            dt_[-u_.shape[0]:], 100*np.asarray(l_, dtype=float), 100*np.asarray(u_, dtype=float),
             color = color,
             #label = f"{cr}% CR" if legend_2 else None,
             label  = CR.format(float(key)) if legend_2 else None,
@@ -2628,8 +2628,83 @@ def plot_zone_neighborhood(fig, ax, palette_, X_, regions_, idx_, region):
     ax.yaxis.grid(True,linewidth=0.7, alpha=0.7)
     ax.set_axisbelow(True)  # grid behind bars
     # Optional: light y ticks without spine
-    ax.tick_params(axis='y', length=0, labelsize=10)
-    ax.tick_params(axis='x', labelsize=10)
+    ax.tick_params(axis='y', length=0, labelsize=11)
+    ax.tick_params(axis='x', labelsize=11)
 
     ax.set_ylabel("Neighborhood (%)", fontsize = 12)
     #ax.set_ylim(0, 100)
+
+
+def plot_zonal_dynamic_update(
+    _fig,
+    _ax,
+    palette_,
+    F_curves_,
+    M_curves_,
+    dxs_,
+    dts_,
+    legend=False,
+    colorbar=True,
+    label=r"$\bar{f} (s)$",
+    n = 120,
+    range_=[],
+):
+    #print(np.unique(np.array(dxs_).flatten()))
+    dx = np.array(dxs_).flatten()
+    dt, idx_ = np.unique(np.array(dts_).flatten(), return_index=True)
+    dt = dt[:-23]
+    idx_ = idx_[:-23]
+
+    dx = dx[idx_]
+    
+    _cmap = sns.color_palette("rocket_r", as_cmap=True)
+    _norm = plt.Normalize(0.0, len(F_curves_))
+
+    _ax.plot(
+        [], [], 
+        lw=0.75, 
+        label=label if legend else None, 
+        c="k"
+    )
+
+    for i in range(len(F_curves_)):
+        _ax.plot(
+            dts_[i][:-24],
+            100*F_curves_[i],
+            c=palette_.loc[0, "ibm"],
+            lw=0.75,
+            zorder=8,
+        )
+        
+    for i in range(len(M_curves_)):
+        _ax.plot(
+            dts_[i][:-23] - 60,
+            100*M_curves_[i],
+            c=_cmap(_norm(i)),
+            lw=0.75,
+            zorder=8,
+        )
+
+    idx_ = (dt % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt[idx_], dx[idx_], rotation=0)
+    
+    _ax.set_ylim(0, 100)
+    _ax.set_ylabel("Capacity Factor (%)", size=14)
+    #_ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+
+    _ax.tick_params(axis="both", labelsize=12)
+
+    if colorbar:
+        cbar = _fig.colorbar(
+            cm.ScalarMappable(_norm, _cmap),
+            cax=_ax.inset_axes([1750, 77.5, 650, 6], transform=_ax.transData),
+            orientation="horizontal",
+        )
+
+        cbar.set_ticks([0, len(F_curves_)], labels=["Aug 1 6pm", "Aug 4 6pm"], size=12)
+
+        # cbar.ax.tick_params(length=0)
+
+        cbar.ax.set_title(r"Forecast Update Time $\tau$", rotation=0, size=12)
