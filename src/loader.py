@@ -1,6 +1,7 @@
 import pickle as pkl
 import numpy as np
 import pandas as pd
+import warnings
 
 from datetime import datetime
 
@@ -157,8 +158,111 @@ def error_scores(
 
     # print(latex)
     return df_fmt, latex
+
+
+SCORE_DP, FRAC_DP = 3, 2
+
+def _prep(frame, keep):
+    out = frame.reset_index(drop=False)
+    out = out[out["alpha"].round(1).isin(keep)].copy()
+    out["alpha"] = out["alpha"].round(1)
+    out["fraction"] = out["fraction"].round(FRAC_DP)
+    return out
  
-def envelope_scores(df, alphas = [0.1, 0.2]):
+ 
+def envelope_scores(df, alphas=(0.1, 0.2)):
+
+    METRICS = ["FIS", "FCS", "SCP"]
+    DISTANCES = ["MBD", "fknn", "MBDnom", "ECDF"]   # print order
+    SELECTED = {"MBD", "fknn"}                      # blocks reported with a 
+    NOMINAL_LABEL = r"MBD$_{k=1-\alpha}$"
+
+    keep = [round(a, 1) for a in alphas]
+    df = _prep(df, keep)
+ 
+    # scores at the fraction selected by the same criterion as the score
+    tuned = df[df["distance"] != "ECDF"]
+    matched = pd.concat(
+        [
+            tuned.loc[tuned["score"] == m,
+                      ["time", "alpha", "distance", m, "fraction"]]
+            .rename(columns={m: "value"})
+            .assign(metric=m)
+            for m in METRICS
+        ],
+        ignore_index=True,
+    )
+ 
+    # MBD at the nominal fraction k = 1 - alpha: no selection step, no fraction.
+    # These rows must be emitted upstream, where the fraction sweep still exists.
+    nom = (
+        df[(df["distance"] == "MBD") &
+           (df["fraction"] == (1 - df["alpha"]).round(FRAC_DP))]
+        .drop_duplicates(subset=["time", "alpha"])
+    )
+    if len(nom) < df[["time", "alpha"]].drop_duplicates().shape[0]:
+        warnings.warn("no MBD row at fraction k = 1 - alpha for some "
+                      "(time, alpha); emit those rows in the selection step")
+    nominal = (
+        nom.melt(id_vars=["time", "alpha"], value_vars=METRICS,
+                 var_name="metric", value_name="value")
+        .assign(distance="MBDnom")
+    )
+ 
+    # ECDF baseline: no selection step either, hence no fraction
+    ecdf = (
+        df.loc[df["distance"] == "ECDF", ["time", "alpha"] + METRICS]
+        .melt(id_vars=["time", "alpha"], var_name="metric", value_name="value")
+        .assign(distance="ECDF")
+    )
+ 
+    df_fmt = (
+        pd.concat([matched, nominal, ecdf], ignore_index=True)
+        .pivot_table(index=["time", "alpha"],
+                     columns=["metric", "distance"],
+                     values=["value", "fraction"],
+                     aggfunc="mean")          # one row per cell; mean is a no-op
+        .rename(columns={"value": "score", "fraction": "frac"}, level=0)
+        .reorder_levels([1, 2, 0], axis=1)    # (metric, distance, field)
+    )
+ 
+    # fixed column order: score then frac per distance; only tuned blocks have one
+    cols = [
+        (m, d, f)
+        for m in METRICS
+        for d in DISTANCES
+        for f in (["score", "frac"] if d in SELECTED else ["score"])
+        if (m, d, f) in df_fmt.columns
+    ]
+    df_fmt = df_fmt[cols]
+    df_fmt.columns.names = [" ", " ", None]
+ 
+    # fixed decimals (astype(str) would drop trailing zeros and misalign)
+    printed = df_fmt.copy()
+    for c in printed.columns:
+        dp = SCORE_DP if c[2] == "score" else FRAC_DP
+        printed[c] = printed[c].map(
+            lambda v, dp=dp: "" if pd.isna(v) else f"{v:.{dp}f}")
+    printed.columns = pd.MultiIndex.from_tuples(
+        [(m, NOMINAL_LABEL if d == "MBDnom" else d, f)
+         for m, d, f in printed.columns],
+        names=printed.columns.names,
+    )
+ 
+    latex = (
+        printed.style
+        .format_index(lambda v: f"{v:g}", level="alpha")
+        .to_latex(
+            column_format="cl" + "c" * printed.shape[1],
+            hrules=True,
+            multirow_align="c",
+            multicol_align="c",
+        )
+    )
+ 
+    return df_fmt, latex
+    
+def envelope_scores_old(df, alphas = [0.1, 0.2]):
  
     METRICS = ["FIS", "FCS", "SCP"]
     DISTANCES = ["MBD", "fknn", "ECDF"]
@@ -188,7 +292,9 @@ def envelope_scores(df, alphas = [0.1, 0.2]):
     # no selection step, hence no fraction
     ecdf = (
         df.loc[df["distance"] == "ECDF", ["time", "alpha"] + METRICS]
-        .melt(id_vars=["time", "alpha"], var_name="metric", value_name="value")
+        .melt(id_vars=["time", "alpha"], 
+              var_name="metric", 
+              value_name="value")
         .assign(distance="ECDF")
     )
  

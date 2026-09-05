@@ -33,6 +33,7 @@ def plot_histogram_cuts(
     _fig, 
     _ax, 
     palette_, 
+    WKDs_, 
     KDs_, 
     M_, 
     f_, 
@@ -41,7 +42,7 @@ def plot_histogram_cuts(
     dx_, 
     dt_, 
     interval, 
-    slices_=[]
+    slices_=[],
 ):
 
     tau_ = dt_[:interval]
@@ -50,12 +51,13 @@ def plot_histogram_cuts(
     x_ = np.linspace(0, 100, 1000)[:, np.newaxis]
 
     for slice, i in zip(slices_, range(len(slices_))):
-        z_ = np.exp(KDs_[slice].score_samples(x_))
+        z_ = np.exp(WKDs_[slice].score_samples(x_))
+        w_ = np.exp(KDs_[slice].score_samples(x_))
 
         _ax[i].axvline(
             100*f_hat_[slice],
             color=palette_.loc[0, "ibm"],
-            lw=2,
+            lw=2.5,
             ls="--",
             # label="CF (actual)",
             zorder=10,
@@ -64,7 +66,7 @@ def plot_histogram_cuts(
         _ax[i].axvline(
             100 * e_[interval + slice - 1],
             color="k",
-            lw=2,
+            lw=2.5,
             # label="CF (forecast)",
             zorder=10,
         )
@@ -83,9 +85,17 @@ def plot_histogram_cuts(
 
         _ax[i].plot(
             x_, z_, 
-            label="KDE (update)", 
+            label="WKDE (update)", 
             color=palette_.loc[1, "ibm"], 
-            lw=2, 
+            lw=1.25, 
+            zorder=9
+        )
+
+        _ax[i].plot(
+            x_, w_, 
+            label="KDE (update)", 
+            color='#006a50', 
+            lw=1.25, 
             zorder=9
         )
 
@@ -217,7 +227,7 @@ def plot_heatmap_slices(
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(cmap=_cmap),
-            cax=_ax.inset_axes([300, 75, 150, 5], transform=_ax.transData),
+            cax=_ax.inset_axes([525, 75, 125, 5], transform=_ax.transData),
             orientation="horizontal",
             extend="max",
         )
@@ -245,6 +255,7 @@ def plot_updates(
     range_=[],
     legend_1=True,
     legend_2=False,
+    colorbar=True,
     colorbar_pos = [150, 75, 150, 5],
 ):
 
@@ -337,17 +348,18 @@ def plot_updates(
 
     _ax.tick_params(axis="both", labelsize=12)
 
-    cbar = _fig.colorbar(
-        cm.ScalarMappable(_norm, _cmap),
-        cax=_ax.inset_axes(colorbar_pos, transform=_ax.transData),
-        orientation="horizontal",
-    )
-
-    cbar.set_ticks([0, 1], labels=[1, M_.shape[0]], size=12)
-
-    # cbar.ax.tick_params(length=0)
-
-    cbar.ax.set_title("Similarity Rank", rotation=0, size=12)
+    if colorbar:
+        cbar = _fig.colorbar(
+            cm.ScalarMappable(_norm, _cmap),
+            cax=_ax.inset_axes(colorbar_pos, transform=_ax.transData),
+            orientation="horizontal",
+        )
+    
+        cbar.set_ticks([0, 1], labels=[1, M_.shape[0]], size=12)
+    
+        # cbar.ax.tick_params(length=0)
+    
+        cbar.ax.set_title("Similarity Rank", rotation=0, size=13)
 
 def plot_neighbors(
     _fig,
@@ -366,6 +378,8 @@ def plot_neighbors(
     range_=[],
     legend_1=False,
     legend_2=False,
+    colorbar=False,
+    colorbar_pos = [150, 75, 150, 5],
 ):
 
     tau_ = dt_[:interval]
@@ -456,6 +470,19 @@ def plot_neighbors(
 
     _ax.tick_params(axis="both", labelsize=12)
 
+    if colorbar:
+        cbar = _fig.colorbar(
+            cm.ScalarMappable(_norm, _cmap),
+            cax=_ax.inset_axes(colorbar_pos, transform=_ax.transData),
+            orientation="horizontal",
+        )
+    
+        cbar.set_ticks([0, 1], labels=[1, M_.shape[0]], size=12)
+    
+        # cbar.ax.tick_params(length=0)
+    
+        cbar.ax.set_title("Similarity Rank", rotation=0, size=13)
+
 
 def plot_forecasts(
     _fig,
@@ -474,6 +501,8 @@ def plot_forecasts(
     range_=[],
     legend_1=False,
     legend_2=False,
+    colorbar=False,
+    colorbar_pos = [150, 75, 150, 5],
 ):
 
     tau_ = dt_[:interval]
@@ -484,7 +513,6 @@ def plot_forecasts(
 
     _cmap = sns.color_palette("rocket", as_cmap=True)
     _norm = plt.Normalize(0, 1)
-
 
     _ax.plot(
         tau_,
@@ -563,6 +591,18 @@ def plot_forecasts(
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
     _ax.tick_params(axis="both", labelsize=12)
+    if colorbar:
+        cbar = _fig.colorbar(
+            cm.ScalarMappable(_norm, _cmap),
+            cax=_ax.inset_axes(colorbar_pos, transform=_ax.transData),
+            orientation="horizontal",
+        )
+    
+        cbar.set_ticks([0, 1], labels=[1, M_.shape[0]], size=12)
+    
+        # cbar.ax.tick_params(length=0)
+    
+        cbar.ax.set_title("Similarity Rank", rotation=0, size=13)
 
 def plot_envelope(
     _fig, _ax, palette_, _upper, _lower, m_, f_, f_hat_, 
@@ -615,12 +655,29 @@ def plot_envelope(
         label = r"Forecast CF $e_{*} (t)$" if legend_1 else None, 
         zorder = 8
     )
-    
+
+    _ax.plot(
+        s_, 
+        100*m_[1:], 
+        c = color_med, 
+        label = label if legend_2 else None,
+        lw = 2, 
+        zorder = 10
+    )
+
     colors_ = ["lightgray", "darkgray", "gray", "dimgray"]
+
+    # Numeric keys only: skip 'max'/'min'/'whisker' when the caller passes
+    # the functional-boxplot dictionaries
+    keys_ = sorted(
+        (k for k in _upper.keys() if k not in ('max', 'whisker')),
+        key = float
+    )
+
     for color, key, i in zip(
         colors_, 
-        _upper.keys(), 
-        range(len(_upper.keys()))
+        keys_, 
+        range(len(keys_))
     ):
 
         u_ = _upper[key]
@@ -630,7 +687,7 @@ def plot_envelope(
         _ax.fill_between(
             dt_[-u_.shape[0]:], 100*u_, 100*l_,
             color  = color,
-            label  = f"{cr}% {CR}" if legend_2 else None,
+            label  = CR.format(float(key)) if legend_2 else None,
             zorder = i + 1
         )
 
@@ -640,15 +697,6 @@ def plot_envelope(
         100*np.zeros(tau_.shape),
         color = "lightgray",
         alpha = 0.5
-    )
-
-    _ax.plot(
-        s_, 
-        100*m_[1:], 
-        c = color_med, 
-        label = label if legend_2 else None,
-        lw = 2, 
-        zorder = 10
     )
 
     idx_ = (dt_ % n) == 0
@@ -777,6 +825,7 @@ def plot_depth(
     n = 120,
     colorbar = True,
     colorbar_pos = [285, 75, 150, 5],
+    labels_1 = False,
 ):
 
     dt = dt_[1] - dt_[0]
@@ -798,7 +847,7 @@ def plot_depth(
     _ax.plot(
         [], [], 
         lw = 0.75,
-        label = r"$\hat{\mu}_i(s)$", 
+        label = r"$\hat{\mu}_i(s)$" if labels_1 else None,
         c = "k"
     )
 
@@ -872,12 +921,13 @@ def plot_depth(
             
         cbar.ax.set_title("Depth Rank", 
                           rotation = 0, 
-                          size = 12)
+                          size = 13)
 
 
 def plot_enhanced_functional_boxplot(
     _fig, _ax, palette_, _upper, _lower, m_, 
     f_, f_hat_, e_, dx_, dt_, interval,
+    CR,
     n = 120,
     range_ = [],
     legend_1 = True, 
@@ -892,7 +942,7 @@ def plot_enhanced_functional_boxplot(
         dt_[interval - 1], 
         color = "k", 
         linewidth = 0.75, 
-        label = r"Forecast Update Time ($\tau$)" if legend_1 else None,
+        label = r"Forecast Update Time $\tau$" if legend_1 else None,
         zorder = 10
     )   
 
@@ -900,7 +950,7 @@ def plot_enhanced_functional_boxplot(
         tau_, 
         100*f_, 
         c = palette_.loc[0, "ibm"], 
-        label = r"Realized CF ($f_{*}(t)$)" if legend_1 else None, 
+        label = r"Realized CF $f_{*}(t)$" if legend_1 else None, 
         zorder = 9,
         lw = 2, 
         clip_on = True
@@ -911,7 +961,7 @@ def plot_enhanced_functional_boxplot(
         c = "k", 
         lw = 2, 
         zorder = 8,
-        label = r"Forecast CF ($e_{*}(t)$)" if legend_1 else None,
+        label = r"Forecast CF $e_{*}(t)$" if legend_1 else None,
         clip_on = True
     )
 
@@ -935,38 +985,64 @@ def plot_enhanced_functional_boxplot(
         lw = 2
     )
 
+    # u_ = _upper['max']
+    # l_ = _lower['min']
+
+    # _ax.plot(
+    #     dt_[-u_.shape[0]:], 
+    #     100*u_, 
+    #     c = 'k', 
+    #     ls = ':',
+    #     lw = .75, 
+    #     zorder = 7
+    # )
     
-    u_ = _upper['max']
-    l_ = _lower['min']
+    # _ax.plot(
+    #     dt_[-l_.shape[0]:], 
+    #     100*l_, 
+    #     c = 'k', 
+    #     ls = ':',
+    #     lw = .75, 
+    #     zorder = 7, 
+    #     label = "min-max" if legend_2 else None
+    # )
+
+    # Whiskers: envelope of the non-outlying curves
+    # if 'whisker' in _upper:
+    u_w_ = _upper['whisker']
+    l_w_ = _lower['whisker']
 
     _ax.plot(
-        dt_[-u_.shape[0]:], 
-        100*u_, 
+        dt_[-u_w_.shape[0]:], 
+        100*u_w_, 
         c = 'k', 
         ls = '--',
         lw = .75, 
         zorder = 7
     )
-    
+
     _ax.plot(
-        dt_[-l_.shape[0]:], 
-        100*l_, 
+        dt_[-l_w_.shape[0]:], 
+        100*l_w_, 
         c = 'k', 
         ls = '--',
         lw = .75, 
         zorder = 7, 
-        label = "min-max" if legend_2 else None
+        label = "whiskers" if legend_2 else None
     )
 
-    _upper.pop('max')
-    _lower.pop('min')
+    # Central regions only, widest first, without mutating the caller's dicts
+    keys_ = sorted(
+        (k for k in _upper.keys() if k not in ('max', 'whisker')),
+        key = float
+    )
 
     colors_ = ["lightgray", "darkgray", "gray"]
 
     for color, key, i in zip(
         colors_, 
-        _upper.keys(), 
-        range(len(_upper.keys()))
+        keys_, 
+        range(len(keys_))
     ):
         u_ = _upper[key]
         l_ = _lower[key]
@@ -975,7 +1051,8 @@ def plot_enhanced_functional_boxplot(
         _ax.fill_between(
             dt_[-u_.shape[0]:], 100*u_, 100*l_,
             color = color,
-            label = f"{cr}% CR" if legend_2 else None,
+            #label = f"{cr}% CR" if legend_2 else None,
+            label  = CR.format(float(key)) if legend_2 else None,
             zorder = i + 1
         )
 
@@ -1001,11 +1078,13 @@ def plot_enhanced_functional_boxplot(
     _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
     _ax.set_ylabel("Capacity Factor (%)", size=14)
 
+    
 def plot_density_heatmap(
     _fig, _ax, palette_, M_, f_median_, f_deepest_, 
     f_focal_, f_, f_hat_, e_, dx_, dt_, interval, 
     n = 120,
     range_ = [0, 287],
+    colorbar_pos = [285, 75, 150, 5],
     colorbar = True,
     legend_1 = True,
     legend_2 = True
@@ -1014,7 +1093,7 @@ def plot_density_heatmap(
     dt = dt_[1] - dt_[0]
     s_ = dt_[interval:]
     tau_ = dt_[:interval]
-    print(s_.shape)
+
     Z_ = []
     for i in range(M_.shape[1]):
         a_, b_ = np.histogram(
@@ -1090,22 +1169,22 @@ def plot_density_heatmap(
         zorder = 11
     )
     
-    # _ax.plot(
-    #     s_, 
-    #     100*f_deepest_[1:], 
-    #     c = palette_.loc[2, "ibm"], 
-    #     label = r"$\hat{\mu}_{deep} (s)$" if legend_2 else None,
-    #     lw = 2, 
-    #     zorder = 10
-    # )
+    _ax.plot(
+        s_, 
+        100*f_deepest_[1:], 
+        c = palette_.loc[2, "ibm"], 
+        label = r"$\hat{\mu}_{deep} (s)$" if legend_2 else None,
+        lw = 2, 
+        zorder = 10
+    )
     
-    # _ax.plot(
-    #     s_, 100*f_deepest_[1:], 
-    #     c = 'k', 
-    #     lw = .25, 
-    #     alpha = 0.5,
-    #     zorder = 11
-    # )
+    _ax.plot(
+        s_, 100*f_deepest_[1:], 
+        c = 'k', 
+        lw = .25, 
+        alpha = 0.5,
+        zorder = 11
+    )
     
     _ax.plot(
         s_, 
@@ -1133,24 +1212,10 @@ def plot_density_heatmap(
         alpha = 0.5
     )
 
-    idx_ = (dt_ % n) == 0
-    idx_[1] = False
-    idx_[-1] = False
-    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
-
-    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation = 0)
-    _ax.set_ylabel("Capacity Factor (%)", size = 14)
-
-    _ax.tick_params(axis = "both", labelsize = 12)
-
-    _ax.set_ylim(0, 100)
-    #_ax.set_xlim(dt_[0], dt_[-1])
-    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
-
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(cmap=_cmap),
-            cax = _ax.inset_axes([285, 75, 150, 5], transform=_ax.transData),
+            cax = _ax.inset_axes(colorbar_pos, transform=_ax.transData),
             orientation = "horizontal",
             extend = "max")
     
@@ -1164,6 +1229,19 @@ def plot_density_heatmap(
     
         cbar.ax.set_title("EDF", rotation=0)
     
+    idx_ = (dt_ % n) == 0
+    idx_[1] = False
+    idx_[-1] = False
+    _ax.set_xticks(dt_[idx_], dx_[idx_], rotation=0)
+
+    _ax.tick_params(axis = "both", labelsize = 12)
+    
+    #_ax.set_xticks(dt_[24::24], dx_[24::24], rotation=0)
+    # ax_[2].set_yticks(size = 12)
+    _ax.set_ylim(0, 100)
+    #_ax.set_xlim(dt_[0], dt_[-1])
+    _ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+    _ax.set_ylabel("Capacity Factor (%)", size=14)
 
 def plot_frequency_map(
     _fig, 
@@ -1405,7 +1483,7 @@ def plot_dynamic_update(
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(_norm, _cmap),
-            cax=_ax.inset_axes([700, 17.5, 150, 5], transform=_ax.transData),
+            cax=_ax.inset_axes([650, 75, 150, 5], transform=_ax.transData),
             orientation="horizontal",
         )
 
@@ -2073,7 +2151,7 @@ def plot_dates_histogram(
 
     _ax.hist(
         t_tr_[idx_fed_],
-        bins=50,
+        bins=30,
         range=(1, 365),
         color="darkgray",
         edgecolor="w",
@@ -2082,7 +2160,7 @@ def plot_dates_histogram(
 
     _ax.hist(
         t_tr_[idx_fed_][idx_x_],
-        bins=50,
+        bins=30,
         range=(1, 365),
         alpha=0.5,
         color=palette_.loc[3, "ibm"],
@@ -2148,7 +2226,7 @@ def plot_distance_histogram(
 
     _ax.hist(
         d_x_,
-        bins=50,
+        bins=30,
         range=(0, d_x_.max()),
         color="darkgray",
         edgecolor="w",
@@ -2158,7 +2236,7 @@ def plot_distance_histogram(
 
     _ax.hist(
         d_x_[idx_x_local_],
-        bins=50,
+        bins=30,
         range=(0, d_x_.max()),
         alpha=0.5,
         color=palette_.loc[3, "ibm"],

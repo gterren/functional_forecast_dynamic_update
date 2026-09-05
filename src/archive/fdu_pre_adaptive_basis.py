@@ -187,8 +187,8 @@ class functional_dynamic_update:
     #     else:
     #         return self._periodic_dist(d1, d2 + gamma)
         
-    # kernel based on distance (d_)
-    def _kernel(self, r_, length_scale):
+    # Radial Basis function kernel based on distance (d_)
+    def _rbf_kernel(self, r_, length_scale):
         return np.exp(-length_scale*np.sqrt(r_))
 
     # Filter by similarity distance
@@ -486,19 +486,19 @@ class functional_dynamic_update:
             self.d_d_ = None
 
         # w: partially observed curve similarity
-        self.w_f_ = self._kernel(
+        self.w_f_ = self._rbf_kernel(
             self.d_f_, 
             self.length_scale_f
         )
 
         # w: DA forecast similarity
-        self.w_e_ = self._kernel(
+        self.w_e_ = self._rbf_kernel(
             self.d_e_, 
             self.length_scale_e
         )
 
         # w: Temporal similarity
-        self.w_d_ = self._kernel(
+        self.w_d_ = self._rbf_kernel(
             self.d_d_, 
             self.length_scale_d
         )
@@ -562,7 +562,7 @@ class functional_dynamic_update:
         #     self.d_x = None
 
         # # w: Spatial similarity
-        # self.w_x_ = self._kernel(
+        # self.w_x_ = self._rbf_kernel(
         #     self.d_x_, 
         #     self.length_scale_x
         # )
@@ -612,6 +612,7 @@ class functional_dynamic_update:
             self.w_prime_  = np.exp(lw_ - lw_.max())
             self.w_prime_ /= self.w_prime_.sum()
     
+    
             self.r = self.d_x_[self.idx_x_local_].max()
             self.t_max = self.t_[self.idx_fed_].max()
             self.d_max = self.d_d_[self.idx_fed_].max()
@@ -642,13 +643,13 @@ class functional_dynamic_update:
             lw_ = self.log_w_fed_[self.idx_x_]
             self.w_prime_  = np.exp(lw_ - lw_.max())
             self.w_prime_ /= self.w_prime_.sum()
+        
             # diagnostics, mirroring the haversine branch
             # self.xi    = self.log_w_fed_[self.idx_fed_].min() - self.log_w_fed_.max()
             self.r     = self.d_x_[self.idx_x_].max()          # max clique order used
             self.t_max = self.t_[self.idx_fed_].max()
             self.d_max = self.d_d_[self.idx_fed_].max()
 
-        self.ess = 1.0 / np.sum(self.w_prime_ ** 2)
         self.xi = np.exp(self.log_w_fed_[self.idx_fed_].min())   # log relative similarity, 0 = best
         # Fuse neighboring curves with DA forecasts
         self.M_, self.m_0_ = self._fuse_curves(
@@ -676,185 +677,12 @@ class functional_dynamic_update:
         
         return self.M_
 
-    # ------------------------------------------------------------------
-    # Adaptive B-spline basis for the forecast horizon
-    # ------------------------------------------------------------------
-    def _effective_support(self, n_points):
-        """
-        Mask and index of the effective support of the extended forecast
-        horizon grid.
-
-        The extended horizon grid is t_ = dt_[-(n_points + 1):], i.e., the
-        anchor (the last observation, at interval - 1) followed by the
-        S = n_points future instants; its mask is the tail of
-        self.interval_mask. The anchor always belongs to the support: every
-        fused curve is pinned to f_0 there.
-        """
-        mask_ = np.asarray(
-            self.interval_mask[-(n_points + 1):], dtype = bool
-        ).copy()
-        mask_[0] = True
-
-        idx_ = np.flatnonzero(mask_)
-
-        # Degenerate mask (no active instant in the horizon): fall back to
-        # the full grid so the expansion is always well posed
-        if idx_.shape[0] < 2:
-            mask_ = np.ones(n_points + 1, dtype = bool)
-            idx_ = np.flatnonzero(mask_)
-
-        return mask_, np.arange(idx_[0], idx_[-1] + 1)
-
-    def _effective_horizon(self, mask_, n_points, mask_mode = 'horizon'):
-        """
-        Number of active samples in the extended forecast horizon, S_eff.
-
-        Two equivalent-for-wind definitions:
-
-        'horizon' (default) counts the active instants of the horizon
-        directly, S_eff = interval_mask[interval - 1:].sum(). It is exact for
-        any mask.
-
-        'day' uses the closed form implied by the masked-out fraction of the
-        horizon, omega = (T - interval_mask.sum()) / (T - interval),
-
-            S_eff = (T - interval) (1 - omega) + 1
-                  = interval_mask.sum() - interval + 1,
-
-        a function of interval_mask.sum(), T and interval alone. It is exact
-        when the active window starts at the beginning of the day -- always
-        true for wind, where omega = 0 and S_eff = T - interval + 1 -- but it
-        charges the horizon with the *whole day's* inactive samples, so for
-        solar it understates the remaining daylight and can even turn
-        negative late in the day. It is kept for reference and clamped to at
-        least one sample.
-        """
-        if mask_mode == 'day':
-            S_eff = int(self.interval_mask.sum()) - (self.T - n_points) + 1
-        else:
-            S_eff = int(mask_.sum())
-
-        return max(1, S_eff)
-
-    def _adaptive_basis(
-        self,
-        t_,
-        n_points,
-        basis_per_hour = 4./3.,
-        order = 4,
-        n_basis = None,
-        min_basis = None,
-        max_basis = None,
-        mask_mode = 'horizon',
-        eps = 1e-9,
-    ):
-        """
-        B-spline basis whose degrees of freedom and knot placement adapt to
-        the forecast update time and to the interval mask.
-
-        The number of knot spans is proportional to the *effective* duration
-        of the horizon -- the active samples S_eff of the extended horizon
-        over the sampling rate -- so that the number of spans per active hour,
-
-            basis_per_hour = (n_basis - order + 1) n_samples_per_hour / S_eff,
-
-        and hence the knot spacing and the smoothing resolution, is invariant
-        to the update time and to the energy feature:
-
-            m       = ceil(basis_per_hour * S_eff / n_samples_per_hour)
-            n_basis = m + order - 1.
-
-        With the default basis_per_hour = 4/3 (a 45-minute knot span) a wind
-        asset at interval = 144 (12 h of horizon at 12 samples/h) gives
-        n_basis = 20, reproducing the previously hard-coded value, while
-        interval = 216 (6 h) gives 12 and interval = 72 (18 h) gives 28 --
-        the same degrees of freedom per unit of active time in all three
-        cases, instead of a knot spacing that ranged from 21 to 64 minutes.
-
-        Knots sit at equally spaced quantiles of the cumulative count of
-        active instants inside the support, so they are uniform when the mask
-        is inactive (wind) and concentrate on daylight when it is (solar),
-        rather than spending degrees of freedom on the flat night.
-
-        Passing n_basis overrides the count but keeps the mask-aware knots.
-        """
-        order = int(order)
-
-        mask_, idx_support_ = self._effective_support(n_points)
-        m_support_ = mask_[idx_support_]
-        n_support = idx_support_.shape[0]
-
-        S_eff = self._effective_horizon(
-            mask_, n_points, mask_mode = mask_mode
-        )
-        hours_eff = S_eff / self.n_samples_per_hour
-
-        # Number of knot spans
-        if n_basis is None:
-            m = int(np.ceil(basis_per_hour*hours_eff))
-        else:
-            m = int(n_basis) - order + 1
-
-        if min_basis is not None:
-            m = max(m, int(min_basis) - order + 1)
-        if max_basis is not None:
-            m = min(m, int(max_basis) - order + 1)
-
-        # At least one span, and no more coefficients than support points
-        m = int(np.clip(m, 1, max(1, n_support - order + 1)))
-
-        # Knots at equally spaced quantiles of active time
-        t_support_ = t_[idx_support_]
-        u_ = np.cumsum(m_support_.astype(float))
-        # Strictly increasing so the quantile map is well defined; the ramp
-        # is negligible, so no knot is placed inside an inactive run
-        u_ = u_ + eps*np.arange(u_.shape[0])
-
-        knots_ = np.interp(
-            np.linspace(u_[0], u_[-1], m + 1), u_, t_support_
-        )
-        knots_[0] = t_support_[0]
-        knots_[-1] = t_support_[-1]
-
-        # Fall back to a uniform grid if the quantile map collapsed
-        if np.any(np.diff(knots_) <= 0.):
-            knots_ = np.linspace(t_support_[0], t_support_[-1], m + 1)
-
-        _basis = BSpline(knots = list(knots_), order = order)
-
-        # Diagnostics
-        self.idx_support_ = idx_support_
-        self.knots_ = knots_
-        self.n_basis = _basis.n_basis
-        self.S_eff = S_eff
-        self.hours_eff = hours_eff
-        self.knot_spacing = hours_eff/m
-        self.basis_per_active_hour = m/hours_eff
-
-        return _basis, idx_support_
-
     # Downsample collection of curves
     def functional_downsampling(
-        self,
-        subsample,
-        n_basis = None,
-        basis_per_hour = 4./3.,
-        order = 4,
-        min_basis = None,
-        max_basis = None,
-        mask_mode = 'horizon'
+        self, 
+        subsample, 
+        n_basis = 20
     ):
-        """
-        Smooth the fused curves on an adaptive B-spline basis and re-evaluate
-        them on the original and on a downsampled grid.
-
-        n_basis defaults to None: the number of basis functions follows from
-        the length of the horizon and from the interval mask through
-        _adaptive_basis, so the knot spacing -- the smoothing resolution -- is
-        the same at every forecast update time and for both energy features.
-        Passing an integer restores a fixed number of degrees of freedom,
-        still with mask-aware knots.
-        """
 
         dt_ = self.dt_
         M_ = self.M_
@@ -863,265 +691,88 @@ class functional_dynamic_update:
 
         f_0_ = np.ones(self.m_0_.shape)*self.f_0
         M_ext_ = np.concatenate([f_0_, M_], axis = 1)
-
-        # Extended horizon grid and downsampled grid
+    
+        # Ensure the length is divisible by subsample
+        dt = dt_[1] - dt_[0]
         t_ = dt_[-n_points-1:]
         t_ds_ = np.linspace(t_[1], t_[-1], int(n_points/subsample))
-
-        # Basis adapted to the interval and to the interval mask
-        _basis, idx_support_ = self._adaptive_basis(
-            t_,
-            n_points,
-            basis_per_hour = basis_per_hour,
-            order = order,
-            n_basis = n_basis,
-            min_basis = min_basis,
-            max_basis = max_basis,
-            mask_mode = mask_mode,
-        )
-
-        t_support_ = t_[idx_support_]
-
-        # Expansion on the effective support
+    
+        # Create an FDataGrid object
+        data_ = [M_ext_[i, :] for i in range(n_samples)]
         _fd = FDataGrid(
-            data_matrix = [M_ext_[i, idx_support_] for i in range(n_samples)],
-            grid_points = t_support_
+            data_matrix = data_, 
+            grid_points = t_
         )
-        _fd_int = _fd.to_basis(_basis)
-
-        # Re-evaluate on the original grid; instants outside the effective
-        # support keep their observed value (the flat night, for solar)
-        M_int_ = M_ext_.copy()
-        M_int_support_ = _fd_int.to_grid(t_support_)
-        M_int_[:, idx_support_] = np.stack(
-            [M_int_support_.data_matrix[i] for i in range(n_samples)]
+        _fd_int = _fd.to_basis(BSpline(n_basis = n_basis))
+        
+        # Interpolate first (useful if data are unevenly spaced or need smoothing)
+        M_int_ = _fd_int.to_grid(t_)
+        self.M_int_ = np.stack(
+            [M_int_.data_matrix[i] for i in range(n_samples)]
         )[..., 0]
-        self.M_int_ = M_int_
-
-        # Re-evaluate on the downsampled grid
-        in_support_ = (t_ds_ >= t_support_[0]) & (t_ds_ <= t_support_[-1])
-        M_int_ds_ = np.stack([
-            np.interp(t_ds_, t_, M_ext_[i, :]) for i in range(n_samples)
-        ])
-
-        if in_support_.any():
-            M_int_ds_support_ = _fd_int.to_grid(t_ds_[in_support_])
-            M_int_ds_[:, in_support_] = np.stack(
-                [M_int_ds_support_.data_matrix[i] for i in range(n_samples)]
-            )[..., 0]
-
-        self.M_int_ds_ = M_int_ds_
+        
+        # Re-evaluate existing data
+        M_int_ds_ = _fd_int.to_grid(t_ds_)
+        self.M_int_ds_ = np.stack(
+            [M_int_ds_.data_matrix[i] for i in range(n_samples)]
+        )[..., 0]
 
         return self.M_int_, self.M_int_ds_
-    
-    # def focal_curve_envelope(
-    #         self,
-    #         _depth,
-    #         X_,
-    #         dist,
-    #         max_iter = 100,
-    #         idx_focal = 0
-    # ):
-    #     """
-    #     Envelope algorithm to obtain functional neighborhoods.
-    
-    #     Parameters
-    #     ----------
-    #     data: dict
-    #         Dictionary with keys:
-    #             - "x": np.ndarray of grid points (n_points,)
-    #             - "y": np.ndarray of function values (n_points, n_curves)
-    #     focal: int or str
-    #         Index (or column name) of the focal curve to envelope.
-    #     plot : bool, optional
-    #         Whether to plot the selected curves in each iteration.
-    #     max_iter: int, optional
-    #         Maximum number of iterations before stopping.
-    
-    #     Returns
-    #     -------
-    #     dict
-    #         Dictionary with key 'Jordered' containing the ordered list
-    #         of selected curve indices.
-    #     """
 
-    #     self.dist = dist
-
-    #     self.f_focal_ext_ = np.insert(self.f_focal_, 0, self.f_0)
-
-    #     X_ext_ = np.concatenate([
-    #         self.f_focal_ext_[np.newaxis, :], X_], axis = 0)[:, 1:].T
-        
-    #     dt_ = self.dt_[-X_ext_.shape[0]:]
-
-    #     if self.dist == 'fknn':
-    #         #dist_ = np.insert(self.w_prime_, 0, 0)
-    #         d_fknn_ = -self.log_w_fed_[self.idx_x_]     # >= 0, smaller = more similar
-    #         dist_   = np.insert(d_fknn_, 0, 0.)
-    #     else:
-    #         dist_ = self.dist
-
-        
-    #     # Compute depth to find the focal curve
-    #     _fd_filtered = FDataGrid(
-    #         data_matrix = X_ext_.T,
-    #         grid_points = dt_
-    #     )
-        
-    #     #filtered_depth_ = _depth(_fd_filtered)
-    #     # idx_focal       = np.argsort(-filtered_depth_)[0]
-    #     f_ = X_ext_[:, idx_focal]
     
-    #     if isinstance(dist_, str):
-    #         # Distances from curves to the focal curve
-    #         if dist_ == 'sup':
-    #             dist_ = np.max(np.abs(X_ext_.T - f_), axis = 1)
-    #         elif dist_ == 'l2':
-    #             dist_ = np.sum((X_ext_.T - f_)**2, axis = 1)
-                
-    #     # Initialize
-    #     idx_subsample = []
-    #     idx_          = [i for i in range(X_ext_.shape[1]) if i != idx_focal]
-    #     iter_depth    = [0]
-    #     iteration     = 0
-    
-    #     while len(idx_) > 1:
-            
-    #         # New iteration
-    #         iteration += 1
-            
-    #         # Sort curves by distance
-    #         idx_sorted_dist_   = [idx_[i] for i in np.argsort(dist_[idx_])]
-    #         idx_iter_subsample = [idx_sorted_dist_[0]]
-    #         idx_candidates     = idx_sorted_dist_[1:]
-    #         # Iterative envelope selection
-    #         remaining_points = set(dt_)
-    #         while remaining_points and idx_candidates:
-    #             idx_next = idx_candidates[0]
-    #             combined = idx_iter_subsample + [idx_next]
-                
-    #             # Check if envelopes
-    #             sign_ = np.sign(X_ext_[:, combined].T - f_)
-    #             Ji_   = np.where(np.abs(np.sum(sign_, axis = 0)) < len(combined))[0]
-                
-    #             if len(remaining_points - set(dt_[Ji_]) ) == len(remaining_points):
-    #                 # Does not envelope
-    #                 idx_candidates.pop(0)
-    #             else:
-    #                 remaining_points -= set(dt_[Ji_])
-                    
-    #                 idx_iter_subsample.append(idx_next)
-                    
-    #                 idx_candidates = [c for c in idx_candidates if c not in idx_iter_subsample]
-    #                 idx_           = [c for c in idx_ if c not in idx_iter_subsample]
-    
-    #         # Compute functional depth 
-    #         _fd_subset = FDataGrid(
-    #             data_matrix = (X_ext_[:, [idx_focal] + idx_subsample  + idx_iter_subsample]).T,
-    #             grid_points = dt_
-    #         )
-        
-    #         depth_             = _depth(_fd_subset)
-    #         idx_depth_         = np.argsort(-depth_)
-    #         idx_ordered_depth_ = np.array(
-    #             [idx_focal] + idx_subsample + idx_iter_subsample
-    #         )[idx_depth_]
-    
-    #         # How deep is the new set of curves?
-    #         depth_percentile = 1 - np.where(idx_ordered_depth_ == idx_focal)[0][0]/(len(idx_ordered_depth_) - 1)
-            
-    #         iter_depth.append(depth_percentile)
-    
-    #         # Accept subsample if depth improves
-    #         if max(iter_depth[:-1]) <= iter_depth[-1]:
-    #             idx_subsample.extend(idx_iter_subsample)
-                
-    #         # Stop if there are no more candidate curves
-    #         if not idx_candidates:
-    #             break
-                
-    #         # Stop if max_iter is reached
-    #         if iteration >= max_iter:
-    #             break
-    
-    #     # Selected curves
-    #     idx_sel_ = [idx_focal] + idx_subsample
-        
-    #     # Final selected curves ordered by depth
-    #     _fd_filtered = FDataGrid(
-    #         data_matrix = X_ext_[:, idx_sel_].T,
-    #         grid_points = dt_
-    #     )
-            
-    #     filtered_depth_             = _depth(_fd_filtered)
-    #     idx_filtered_depth_         = np.argsort(-filtered_depth_)
-    #     idx_ordered_filtered_depth_ = np.array(idx_sel_)[idx_filtered_depth_]
-        
-    #     # Select curves for the focal curve envelop
-    #     self.J_ = X_ext_[:, idx_ordered_filtered_depth_].T
-        
-    #     return self.J_
-
-    def focal_curve_envelope_v2(
+    def focal_curve_envelope(
             self,
             _depth,
             X_,
             dist,
-            n_layers = None,
             max_iter = 100,
             idx_focal = 0
     ):
         """
         Envelope algorithm to obtain functional neighborhoods.
     
-        A layer is a minimal subset of curves that brackets the focal curve at
-        every grid point. After `n_layers` accepted layers, at every grid point at
-        least `n_layers` curves lie above and at least `n_layers` below the focal
-        curve, so `n_layers` acts as the band's sharpness level.
-    
-        `n_layers` replaces the previous depth-percentile acceptance rule, which
-        could never reject: self.f_focal_ is a weighted mean of the curves in X_,
-        hence always the deepest curve of any subset containing it, so the
-        percentile was pinned at 1.0 and every layer was accepted. The loop then
-        ran to exhaustion and J_ contained the whole pool, making this method
-        equivalent to depth-based trimming.
-    
         Parameters
         ----------
-        _depth: callable or None
-            Functional depth used to order the selected curves. Pass None to skip
-            the ordering (valid when the caller takes k = 1, i.e. min/max over all
-            of J_).
-        X_: np.ndarray, (n_curves, n_points + 1)
-            Curves to select from, first column the common anchor f_0.
-        dist: str or np.ndarray
-            'fknn', 'sup', 'l2', or a precomputed distance vector.
-        n_layers: int, optional
-            Number of enveloping layers to accept. None means max_iter.
+        data: dict
+            Dictionary with keys:
+                - "x": np.ndarray of grid points (n_points,)
+                - "y": np.ndarray of function values (n_points, n_curves)
+        focal: int or str
+            Index (or column name) of the focal curve to envelope.
+        plot : bool, optional
+            Whether to plot the selected curves in each iteration.
         max_iter: int, optional
-            Hard cap on iterations.
-        idx_focal: int, optional
-            Column of X_ext_ holding the focal curve.
+            Maximum number of iterations before stopping.
     
         Returns
         -------
-        np.ndarray, (n_selected, n_points)
-            Selected curves, ordered by decreasing depth when _depth is given.
+        dict
+            Dictionary with key 'Jordered' containing the ordered list
+            of selected curve indices.
         """
+
         self.dist = dist
+
         self.f_focal_ext_ = np.insert(self.f_focal_, 0, self.f_0)
-        X_ext_ = np.concatenate([
-            self.f_focal_ext_[np.newaxis, :], X_], axis = 0)[:, 1:].T
-    
+
+        X_ext_ = np.concatenate([self.f_focal_ext_[np.newaxis, :], X_], axis = 0)[:, 1:].T
         dt_ = self.dt_[-X_ext_.shape[0]:]
-        f_  = X_ext_[:, idx_focal]
-    
+
         if self.dist == 'fknn':
-            dist_ = np.insert(-self.w_prime_, 0, 0)
-            #d_fknn_ = -self.log_w_fed_[self.idx_x_]     # >= 0, smaller = more similar
-            #dist_   = np.insert(d_fknn_, 0, 0.)
+            dist_ = np.insert(self.w_prime_, 0, 0)
         else:
             dist_ = self.dist
+
+        
+        # Compute depth to find the focal curve
+        _fd_filtered = FDataGrid(
+            data_matrix = X_ext_.T,
+            grid_points = dt_
+        )
+        
+        #filtered_depth_ = _depth(_fd_filtered)
+        # idx_focal       = np.argsort(-filtered_depth_)[0]
+        f_ = X_ext_[:, idx_focal]
     
         if isinstance(dist_, str):
             # Distances from curves to the focal curve
@@ -1129,257 +780,91 @@ class functional_dynamic_update:
                 dist_ = np.max(np.abs(X_ext_.T - f_), axis = 1)
             elif dist_ == 'l2':
                 dist_ = np.sum((X_ext_.T - f_)**2, axis = 1)
-    
+                
         # Initialize
         idx_subsample = []
         idx_          = [i for i in range(X_ext_.shape[1]) if i != idx_focal]
+        iter_depth    = [0]
         iteration     = 0
     
-        # Number of enveloping layers to peel off
-        n_layers = max_iter if n_layers is None else int(n_layers)
-        self.layer_sizes_ = []
-    
         while len(idx_) > 1:
-    
+            
             # New iteration
             iteration += 1
-    
+            
             # Sort curves by distance
             idx_sorted_dist_   = [idx_[i] for i in np.argsort(dist_[idx_])]
             idx_iter_subsample = [idx_sorted_dist_[0]]
             idx_candidates     = idx_sorted_dist_[1:]
-    
             # Iterative envelope selection
             remaining_points = set(dt_)
             while remaining_points and idx_candidates:
                 idx_next = idx_candidates[0]
-
                 combined = idx_iter_subsample + [idx_next]
-    
+                
                 # Check if envelopes
                 sign_ = np.sign(X_ext_[:, combined].T - f_)
                 Ji_   = np.where(np.abs(np.sum(sign_, axis = 0)) < len(combined))[0]
-    
-                if len(remaining_points - set(dt_[Ji_])) == len(remaining_points):
+                
+                if len(remaining_points - set(dt_[Ji_]) ) == len(remaining_points):
                     # Does not envelope
                     idx_candidates.pop(0)
                 else:
                     remaining_points -= set(dt_[Ji_])
-    
+                    
                     idx_iter_subsample.append(idx_next)
-    
+                    
                     idx_candidates = [c for c in idx_candidates if c not in idx_iter_subsample]
                     idx_           = [c for c in idx_ if c not in idx_iter_subsample]
     
-            # The layer did not close: the curves left cannot bracket the focal
-            # curve at every grid point, so drop the partial layer and stop
-            if remaining_points:
-                break
+            # Compute functional depth 
+            _fd_subset = FDataGrid(
+                data_matrix = (X_ext_[:, [idx_focal] + idx_subsample  + idx_iter_subsample]).T,
+                grid_points = dt_
+            )
+        
+            depth_             = _depth(_fd_subset)
+            idx_depth_         = np.argsort(-depth_)
+            idx_ordered_depth_ = np.array([idx_focal] + idx_subsample + idx_iter_subsample)[idx_depth_]
     
-            # Accept the layer
-            idx_subsample.extend(idx_iter_subsample)
-            self.layer_sizes_.append(len(idx_iter_subsample))
+            # How deep is the new set of curves?
+            depth_percentile = 1 - np.where(idx_ordered_depth_ == idx_focal)[0][0]/(len(idx_ordered_depth_) - 1)
+            
+            iter_depth.append(depth_percentile)
     
-            # Stop once n_layers layers have been accepted
-            if iteration >= n_layers:
-                break
-    
+            # Accept subsample if depth improves
+            if max(iter_depth[:-1]) <= iter_depth[-1]:
+                idx_subsample.extend(idx_iter_subsample)
+                
             # Stop if there are no more candidate curves
             if not idx_candidates:
                 break
-    
+                
             # Stop if max_iter is reached
             if iteration >= max_iter:
                 break
     
         # Selected curves
         idx_sel_ = [idx_focal] + idx_subsample
-
-        self.J_ = X_ext_[:, idx_sel_].T
-        if _depth is not None:
-            # Final selected curves ordered by depth
-            _fd_filtered = FDataGrid(
-                data_matrix = self.J_,
-                grid_points = dt_,
-            )
-    
-            filtered_depth_ = _depth(_fd_filtered)
-            self.J_ = self.J_[np.argsort(-filtered_depth_), :]
-
+        
+        # Final selected curves ordered by depth
+        _fd_filtered = FDataGrid(
+            data_matrix = X_ext_[:, idx_sel_].T,
+            grid_points = dt_
+        )
+            
+        filtered_depth_             = _depth(_fd_filtered)
+        idx_filtered_depth_         = np.argsort(-filtered_depth_)
+        idx_ordered_filtered_depth_ = np.array(idx_sel_)[idx_filtered_depth_]
+        
+        # Select curves for the focal curve envelop
+        self.J_ = X_ext_[:, idx_ordered_filtered_depth_].T
+        
         return self.J_
 
-
-    def focal_curve_envelope(
-            self,
-            _depth,
-            P_,
-            X_,
-            dist = 'l2',
-            max_iter = 100,
-            n_layers = None,
-            interval_mask = None,
-    ):
-        """
-        Algorithm 1 of Elias, Jimenez & Shang (2022), JMVA 189:104890.
-
-        Selection happens on the OBSERVED domain D_f and the band is built from
-        the PROJECTIONS on D_p. Past curves are chosen because their observed
-        segment brackets the target's observed segment; the band is what those
-        same curves do next. This is the property the previous version did not
-        have: it enveloped `self.f_focal_` -- a weighted mean of the curves in
-        X_ -- on the prediction domain, so the focal curve was always the
-        deepest member of any subset containing it, the depth percentile was
-        pinned at 1.0, and the acceptance test could never reject.
-
-        Parameters
-        ----------
-        _depth: callable or None
-            Functional depth, e.g. skfda ModifiedBandDepth(). Called on an
-            FDataGrid whose first row is the focal curve, so element 0 of the
-            return is D(f, J). Pass None to disable the depth filter and accept
-            every layer up to `n_layers` -- the ablation, not the method.
-        P_: np.ndarray, (n_curves, n_obs)
-            The candidate curves restricted to D_f: each analog's OWN observed
-            segment. Rows must align 1:1 with the rows of X_.
-        X_: np.ndarray, (n_curves, n_points + 1)
-            The same curves' projections on D_p, first column the anchor.
-        dist: str or np.ndarray
-            'l2' (the paper), 'sup', 'fknn', or a precomputed distance vector.
-            Nearness is measured on D_f, not on the horizon.
-        max_iter: int
-            Hard cap on layers processed.
-        n_layers: int or None
-            Optional cap on ACCEPTED layers. None (the paper) leaves |J|
-            data-determined. Only meaningful with _depth = None.
-        interval_mask: np.ndarray of bool, (n_obs,) or None
-            Restricts the enveloping measure to the active part of D_f. On
-            capacity factors pinned at 0 or 1, np.sign returns 0 and the
-            bracketing test is satisfied trivially, so the "as much as
-            possible" criterion saturates for free overnight.
-
-        Returns
-        -------
-        (np.ndarray (n_selected, n_points), list)
-            The PROJECTIONS of the selected curves, ordered by decreasing depth
-            on D_f, and the accepted layer sizes.
-        """
-        self.dist = dist
-
-        # ---- D_f: the target's observed prefix and the candidates' own ------
-        f_obs_ = np.asarray(self.f_, dtype = np.float64).ravel()
-        P_     = np.asarray(P_, dtype = np.float64)
-        assert P_.shape[1] == f_obs_.shape[0], (
-            f'D_f mismatch: P_ {P_.shape}, f_ {f_obs_.shape}')
-        assert P_.shape[0] == X_.shape[0], (
-            f'P_ and X_ must be the same curves in the same order: '
-            f'{P_.shape[0]} vs {X_.shape[0]}')
-
-        ds_ = self.dt_[:f_obs_.shape[0]]
-        m_  = np.ones(f_obs_.shape[0], dtype = bool) if interval_mask is None \
-              else np.asarray(interval_mask, dtype = bool)
-
-        # ---- D_p: the projections that will form the band -------------------
-        Proj_ = np.asarray(X_, dtype = np.float64)[:, 1:]
-        self.f_focal_ext_ = np.insert(self.f_focal_, 0, self.f_0)
-
-        # ---- nearness, on D_f (the paper uses L2) ---------------------------
-        if isinstance(dist, str):
-            if dist == 'l2':
-                d_ = np.sum((P_ - f_obs_) ** 2, axis = 1)
-            elif dist == 'sup':
-                d_ = np.max(np.absolute(P_ - f_obs_), axis = 1)
-            elif dist == 'fknn':
-                # log-domain: >= 0, smaller = more similar, immune to the
-                # underflow ties a peaked w_prime_ produces
-                d_ = -self.log_w_fed_[self.idx_x_]
-            else:
-                raise ValueError(f'unknown dist {dist}')
-        else:
-            d_ = np.asarray(dist, dtype = np.float64)
-
-        def _enveloped(idx_):
-            """Points of D_f where f is bracketed by the curves in idx_."""
-            sign_ = np.sign(P_[idx_, :] - f_obs_)
-            return (np.absolute(np.sum(sign_, axis = 0)) < len(idx_)) & m_
-
-        def _depth_focal(idx_):
-            """D(f, J): depth of f within J u {f}, on D_f. D(f, empty) = 0."""
-            if (len(idx_) == 0) or (_depth is None):
-                return 0.
-            return float(_depth(FDataGrid(
-                data_matrix = np.vstack([f_obs_[np.newaxis, :], P_[idx_, :]]),
-                grid_points = ds_))[0])
-
-        # ---- Algorithm 1 -----------------------------------------------------
-        Y_ = list(range(P_.shape[0]))
-        J_idx_, depth_J = [], 0.
-
-        self.layer_sizes_    = []
-        self.layer_accepted_ = []
-        self.layer_coverage_ = []
-        self.layer_depth_    = []
-
-        for iteration in range(1, max_iter + 1):
-
-            if len(Y_) < 2:
-                break
-
-            order_ = [Y_[i] for i in np.argsort(d_[Y_])]
-
-            # Build one layer: a single pass over the remaining candidates,
-            # nearest to farthest, keeping any curve that STRICTLY increases
-            # the enveloped measure. The layer need not close -- the paper's
-            # criterion is "enveloped as much as possible", so a partial layer
-            # is the normal case, not a failure.
-            N_    = [order_[0]]
-            cov_  = _enveloped(N_)
-            for j in order_[1:]:
-                new_ = _enveloped(N_ + [j])
-                if new_.sum() > cov_.sum():
-                    N_.append(j)
-                    cov_ = new_
-
-            # The depth FILTER, not a stopping rule: a rejected layer is
-            # discarded and the loop carries on.
-            depth_new = _depth_focal(J_idx_ + N_)
-            accepted  = True if _depth is None else (depth_new >= depth_J)
-
-            if accepted:
-                J_idx_  = J_idx_ + N_
-                depth_J = depth_new
-
-            self.layer_sizes_.append(len(N_))
-            self.layer_accepted_.append(bool(accepted))
-            self.layer_coverage_.append(float(cov_.mean()))
-            self.layer_depth_.append(depth_new)
-
-            # Y = Y \ N, OUTSIDE the acceptance test. Unconditional: this is
-            # what makes the loop terminate whether or not a layer is kept.
-            N_set_ = set(N_)
-            Y_ = [c for c in Y_ if c not in N_set_]
-
-            if (n_layers is not None) and (sum(self.layer_accepted_) >= int(n_layers)):
-                break
-
-        # ---- order J by depth on D_f: the paper's J_k is the k deepest -------
-        if len(J_idx_) > 0 and _depth is not None:
-            depth_ = np.asarray(_depth(FDataGrid(
-                data_matrix = np.vstack([f_obs_[np.newaxis, :], P_[J_idx_, :]]),
-                grid_points = ds_)))[1:]
-            ord_    = np.argsort(-depth_)
-            J_idx_  = list(np.asarray(J_idx_)[ord_])
-            self.depth_J_ = depth_[ord_]
-        else:
-            self.depth_J_ = None
-
-        self.idx_J_ = J_idx_
-        self.J_     = Proj_[J_idx_, :]      # projections, deepest first
-
-        return self.J_, [s for s, a in zip(self.layer_sizes_, self.layer_accepted_) if a]
-        
     # Confidence bands from focal-curve envelop
     #def _focal_envelop_confidence_bands(J_, alpha_, k_, f_0):    
-    def focal_envelope_confidence_region(
+    def focal_envelope_confidence_bands(
             self,
             alpha_,
             k_
@@ -1388,8 +873,7 @@ class functional_dynamic_update:
         self._upper_envelop_confidence_bands = {}
         self._lower_envelop_confidence_bands = {}
         for i in range(len(alpha_)):
-            #N = int(k_[i]*self.J_.shape[0])     
-            N = min(self.J_.shape[0], max(2, int(k_[i]*self.J_.shape[0])))
+            N = int(k_[i]*self.J_.shape[0])            
             self._upper_envelop_confidence_bands[f'{alpha_[i]}'] = np.insert(
                 np.max(self.J_[:N, :], axis = 0),
                 0,
@@ -1401,9 +885,7 @@ class functional_dynamic_update:
                 self.f_0
             )
             
-        return (self.f_focal_ext_, 
-                self._upper_envelop_confidence_bands, 
-                self._lower_envelop_confidence_bands)
+        return self.f_focal_ext_, self._upper_envelop_confidence_bands, self._lower_envelop_confidence_bands
         
     # Functional boxplot from a smooth functional depth metric
     def functional_boxplot(self, X_, depth_score_, alpha_ = [0.25, 0.5, 0.75]):
@@ -1414,10 +896,8 @@ class functional_dynamic_update:
         self._lower_functional_boxplot = {}
 
         for i in range(len(alpha_)):
-            #X_sel_ = X_[idx_[:-int(X_.shape[0] * alpha_[i])],]
-
-            X_sel_ = X_[idx_[:min(X_.shape[0], max(2, int(X_.shape[0]*(1. - alpha_[i]))))], ]
-
+            X_sel_ = X_[idx_[:-int(X_.shape[0] * alpha_[i])],]
+            
             self._upper_functional_boxplot[f'{alpha_[i]}'] = np.max(X_sel_, axis = 0)
             self._lower_functional_boxplot[f'{alpha_[i]}'] = np.min(X_sel_, axis = 0)
     
@@ -1434,26 +914,7 @@ class functional_dynamic_update:
 
         self.f_deepest_ = X_[idx_[0],]
 
-        # Whiskers: envelope of the curves that stay inside the fences, the
-        # central region inflated by factor x its pointwise width
-        alpha_whisker = 0.5
-        factor = 1.5 
-        atol = 1e-3
-        X_sel_ = X_[idx_[:-int(X_.shape[0] * alpha_whisker)],]
-        u_ = np.max(X_sel_, axis = 0)
-        l_ = np.min(X_sel_, axis = 0)
-        w_ = factor * (u_ - l_)
-
-        out_ = np.any((X_ > u_ + w_ + atol) | (X_ < l_ - w_ - atol), axis = 1)
-        X_in_ = X_ if out_.all() else X_[~out_,]
-
-        self._upper_functional_boxplot['whisker'] = np.max(X_in_, axis = 0)
-        self._lower_functional_boxplot['whisker'] = np.min(X_in_, axis = 0)
-        self.idx_outliers_ = np.flatnonzero(out_)
-        
-        return (self.f_deepest_, 
-                self._upper_functional_boxplot, 
-                self._lower_functional_boxplot)
+        return self.f_deepest_, self._upper_functional_boxplot, self._lower_functional_boxplot
         
 
     def _eQuantile(self, _ECDF, q_):
@@ -1494,64 +955,45 @@ class functional_dynamic_update:
     
         return self.f_median_ext_, self._upper_ecdf_confidence_bands, self._lower_ecdf_confidence_bands
 
-    def _eval_depth(self, _depth, X_):
-        
-           # Compute functional depth
+    # Confidence bands from depth function
+    def get_depth(
+            self,
+            _depth,
+            X_
+    ):
+    
+        # Compute functional depth
         _F = FDataGrid(
             data_matrix = X_,
             grid_points = self.dt_[-X_.shape[1]:]
         )
         
-        score_ = _depth(_F)
-        rank_ = np.argsort(score_)[::-1]
-        return score_, rank_
+        depth_score_ = _depth(_F)
+
+        return depth_score_, np.argsort(depth_score_)[::-1]
 
     # Confidence bands from depth function
-    def functional_confidence_region(
-            self,
-            _depth,
-            X_,
-            alpha_,
-    ):
-    
-        # # Compute functional depth
-        # _F = FDataGrid(
-        #     data_matrix = X_,
-        #     grid_points = self.dt_[-X_.shape[1]:]
-        # )
-        
-        # depth_score_ = _depth(_F)
-        # idx_ = np.argsort(depth_score_)[::-1]
-
-        score_, idx_ = self._eval_depth(_depth, X_)
-
-        self._upper_depth_confidence_bands = {}
-        self._lower_depth_confidence_bands = {}
-        for i in range(len(alpha_)):
-            N = int(X_.shape[0]*(1. - alpha_[i]))
-            self._upper_depth_confidence_bands[f'{alpha_[i]}'] = np.max(X_[idx_[:N], :], axis = 0)
-            self._lower_depth_confidence_bands [f'{alpha_[i]}'] = np.min(X_[idx_[:N], :], axis = 0)
-        
-        # Deepest curve
-        self.f_deepest_ext_ = X_[idx_[0], :]
-    
-        return self.f_deepest_ext_, self._upper_depth_confidence_bands, self._lower_depth_confidence_bands 
-
-    # Confidence bands from depth function
-    def adjusted_functional_confidence_region(
+    def depth_confidence_bands(
             self,
             _depth,
             X_,
             alpha_,
             k_
     ):
-
-        score_, idx_ = self._eval_depth(_depth, X_)
+    
+        # Compute functional depth
+        _F = FDataGrid(
+            data_matrix = X_,
+            grid_points = self.dt_[-X_.shape[1]:]
+        )
+        
+        depth_score_ = _depth(_F)
+        idx_ = np.argsort(depth_score_)[::-1]
     
         self._upper_depth_confidence_bands = {}
         self._lower_depth_confidence_bands = {}
         for i in range(len(alpha_)):
-            N = min(X_.shape[0], max(2, int(k_[i]*X_.shape[0])))
+            N = int(k_[i]*X_.shape[0])
             self._upper_depth_confidence_bands[f'{alpha_[i]}'] = np.max(X_[idx_[:N], :], axis = 0)
             self._lower_depth_confidence_bands [f'{alpha_[i]}'] = np.min(X_[idx_[:N], :], axis = 0)
         
@@ -1611,7 +1053,7 @@ class functional_dynamic_update:
         return h
 
     # Derive confidence bands from a functional depth metric
-    def weighted_ecdf_confidence_region(
+    def weighted_ecdf_confidence_bands(
             self,
             X_,
             weights_,
@@ -1637,12 +1079,10 @@ class functional_dynamic_update:
             for j in range(X_.shape[1])
         ])
                 
-        return (self.f_wmedian_ext_, 
-                self._upper_wecdf_confidence_bands, 
-                self._lower_wecdf_confidence_bands)
+        return self.f_wmedian_ext_, self._upper_wecdf_confidence_bands, self._lower_wecdf_confidence_bands
         
     # Silverman's Rule
-    def _silverman_bandwidth(self, x_):
+    def _silverman_rule(self, x_):
         IQR = np.percentile(x_, 75) - np.percentile(x_, 25)
         return 0.9 * min(np.std(x_), IQR / 1.34) * x_.shape[0] ** (-1 / 5)
 
@@ -1655,10 +1095,10 @@ class functional_dynamic_update:
         _KDS = []
         for i in range(M_.shape[1]):
             _KD = KernelDensity(
-                bandwidth = self._silverman_bandwidth(M_[:, i]), 
+                bandwidth = self._silverman_bandwidth(M_[:, i], weights), 
                 algorithm = algorithm, 
                 kernel = kernel
-            ).fit(M_[:, i][:, np.newaxis])
+            ).fit(M_[:, i][:, np.newaxis], weights[:, np.newaxis])
             
             _KDS.append(_KD)
 
@@ -1673,14 +1113,14 @@ class functional_dynamic_update:
     ):
         
         _KDS = []
-        #weights /= weights.sum()
+        weights /= weights.sum()
         for i in range(M_.shape[1]):
             h = self._weighted_silverman_bandwidth(M_[:, i], weights)
             _KD = KernelDensity(
                 bandwidth = h + 0.01, 
                 algorithm = algorithm, 
                 kernel = kernel
-            ).fit(M_[:, i][:, np.newaxis], sample_weight = weights)
+            ).fit(M_[:, i][:, np.newaxis], weights[:, np.newaxis])
             
             _KDS.append(_KD)
 
