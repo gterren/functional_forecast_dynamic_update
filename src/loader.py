@@ -128,19 +128,38 @@ def error_scores(
     error_df = pd.concat(
         error_df, axis = 0
     ).reset_index(drop = True)
-    
+
+    LABELS = {
+        'ECDF' : r'$\hat{\mu}_{mar}(s)$',
+        'MBD' : r'$\hat{\mu}_{deep}(s)$',
+        'fknn': r'$\hat{\mu}_{focal}(s)$',
+    }
+
     error_df = error_df.groupby(
         ['time', 'distance']
     ).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}).reset_index(drop = False)
+
+    error_df = error_df[error_df['distance'].isin(LABELS)].copy()
     
-    # map raw method names to publication-ready labels
     df_fmt = (
         error_df
-        .assign(distance=error_df['distance'].map({'MBD': r'$\hat{\mu}_{deep}(s)$','fknn': r'$\hat{\mu}_{focal}(s)$'}))
-        .rename(columns={'time': r'Forecast Update Time $\tau$', 'distance': 'Estimator'})
-        .rename(columns={'RMSE': 'RMSE', 'MAE': 'MAE', 'MBE': 'MBE'})
-        .round({'RMSE': 4, 'MAE': 4, 'MBE': 4})
+        .assign(distance = pd.Categorical(error_df['distance'].map(LABELS),
+                                          categories = list(LABELS.values()),
+                                          ordered    = True))
+        .sort_values(['time', 'distance'])
+        .rename(columns = {'time': r'Forecast Update Time $\tau$',
+                           'distance': 'Estimator'})
+        .round({'RMSE': 3, 'MAE': 3, 'MBE': 3})
     )
+
+    # # map raw method names to publication-ready labels
+    # df_fmt = (
+    #     error_df
+    #     .assign(distance=error_df['distance'].map({'MBD': r'$\hat{\mu}_{deep}(s)$','fknn': r'$\hat{\mu}_{focal}(s)$'}))
+    #     .rename(columns={'time': r'Forecast Update Time $\tau$', 'distance': 'Estimator'})
+    #     .rename(columns={'RMSE': 'RMSE', 'MAE': 'MAE', 'MBE': 'MBE'})
+    #     .round({'RMSE': 4, 'MAE': 4, 'MBE': 4})
+    # )
     
     latex = (
         df_fmt
@@ -173,8 +192,8 @@ def _prep(frame, keep):
 def envelope_scores(df, alphas=(0.1, 0.2)):
 
     METRICS = ["FIS", "FCS", "SCP"]
-    DISTANCES = ["MBD", "fknn", "MBDnom", "ECDF"]   # print order
-    SELECTED = {"MBD", "fknn"}                      # blocks reported with a 
+    DISTANCES = ["MBD", "l2", "MBDnom", "ECDF"]   # print order
+    SELECTED = {"MBD", "l2"}                      # blocks reported with a 
     NOMINAL_LABEL = r"MBD$_{k=1-\alpha}$"
 
     keep = [round(a, 1) for a in alphas]
@@ -891,6 +910,61 @@ def get_zone_stats(
         funcs_ = funcs_.merge(df_funcs_, on=["region", "day"], how="left")
 
     return stats_, funcs_
+
+def ks_by_block(
+    _init, 
+    resource, 
+    method,
+    aggregation, 
+    exp_description,
+    path_to_validation, 
+    intervals, 
+    lead,
+    starts, 
+    _KS):
+    
+    """
+    KS of the PIT by absolute time block, one column per forecast update time.
+    Returns (df, latex)
+    """
+    
+    ks_ = {}
+    for interval in intervals:
+        pit_ = pit(
+            _init, resource, method, aggregation, interval, exp_description,
+            path_to_validation = path_to_validation,
+        )
+
+        col_ = []
+        for t in starts:
+            c1 = t - interval                 # column of the block in pit_
+            c2 = c1 + lead
+            if c1 < 0 or c2 > pit_.shape[1]:  # block not covered by this update
+                col_.append(np.nan)
+            else:
+                u_ = pit_[:, c1:c2].flatten()
+                u_ = u_[np.isfinite(u_)]
+                col_.append(_KS(u_) if u_.size else np.nan)
+
+        ks_[interval] = col_
+
+    df_ = pd.DataFrame(ks_, index = starts).dropna(how = "all")
+
+    df_fmt = pd.concat(
+        {"block": pd.DataFrame({"t_ini": df_.index, "t_end": df_.index + lead},
+                               index = df_.index),
+         "tau"  : df_},
+        axis = 1,
+    ).reset_index(drop = True).round(3)
+
+    latex_ = df_fmt.to_latex(
+        index = False, escape = False, na_rep = "---",
+        float_format = "%.{}f".format(3),
+        multicolumn = True, multicolumn_format = "c",
+        column_format = "cc" + "c" * len(intervals),
+    )
+
+    return df_fmt, latex_
     
 # ## LOAD UNBIASED DATA
 # # Load 2017 data as training set

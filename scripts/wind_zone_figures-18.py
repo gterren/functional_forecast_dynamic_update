@@ -37,41 +37,26 @@ method = 'fusion'
 resource = 'wind'
 aggregation = 'zone'
 
-# exp_description="unbiased-025-C0"
-# _init = {6: 1, 12: 3, 18: 4}
-
-# exp_description="unbiased-025-C1"
-# _init = {6: 3, 12: 1, 18: 4}
-
-# exp_description="unbiased-025-C2"
-# _init = {6: 2, 12: 5, 18: 5}
-
-# exp_description="biased-025-C0"
-# _init = {6: 3, 12: 5, 18: 2}
-
-# exp_description="biased-025-C1"
-# _init = {6: 1, 12: 4, 18: 1}
-
-# exp_description="biased-025-C2"
-# _init = {6: 4, 12: 4, 18: 1}
-
-# exp_description="unbiased-025-C1"
-# _init = {6: 5, 12: 1, 18: 2}
-
 exp_description="unbiased-025-C1-1"
 _init = {6: 5, 12: 4, 18: 3}
 
 exp_description="unbiased-025-C1-6"
-_init = {6: 4, 12: 4, 18: 4}
+#_init = {6: 4, 12: 4, 18: 4}
+_init = {6: 2, 12: 4, 18: 4}
 
-day = 176
+day = 216
 zone = 1
 interval = 18
 
+score = 'FCS'
+prj_distance = "l2"
+fun_distance = 'MBD'
 alpha_ = [0.1, 0.2, 0.3, 0.4]
 _depth = ModifiedBandDepth()
 
-scale = 10
+scale = 15
+
+# ===============================================
 
 hyper_, envelope_ = loader.hyperparameters(
     _init,
@@ -164,15 +149,13 @@ M_ = _fdu.predict(
 )
 print(_fdu.xi, _fdu.r)
 
+# ===============================================
+
 # Plotting variables
 e_p_[:24] = np.nan
 E_tr_p_[:, :24] = np.nan
 
-# # Calculate confidence intervals from Directional Quantiles
-# f_median_ext_, _upper, _lower = _fdu.ecdf_confidence_bands(
-#     _fdu.M_ext_, 
-#     alpha_,
-# )
+# ===============================================
 
 f_wmedian_ext_, _wupper, _wlower = _fdu.weighted_ecdf_confidence_region(
     _fdu.M_ext_, 
@@ -182,7 +165,7 @@ f_wmedian_ext_, _wupper, _wlower = _fdu.weighted_ecdf_confidence_region(
 
 _fig, _ax = plt.subplots(
     figsize=(7.5, 2.25), 
-    constrained_layout=True
+    constrained_layout=True,
 )
 
 plotter.plot_envelope(
@@ -207,29 +190,29 @@ plotter.plot_envelope(
     legend_2=True,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
-    loc = (0.0125, .225),
-    #loc = 'lower center',
+    #loc = (0.0125, .225),
+    loc = 'upper right',
     fontsize = 13,
     columnspacing = 0.25,
     handletextpad = 0.125,
     labelspacing = 0.125,
-    ncol = 1,
+    ncol = 5,
 )
+
+leg.set_zorder(100)
 
 plt.savefig(IMAGES / f"median_mar_regions-{file_name}.pdf")
 
 plt.show()
 
-# Samples in each confidence band
-score = 'FCS'
-distance = "fknn"
+# ===============================================
 
 J_ = _fdu.focal_curve_envelope(
     None, 
     _fdu.M_ext_, 
-    distance,
+    prj_distance,
 )
 print(J_.shape)
 
@@ -237,7 +220,7 @@ k_ = get_band_fraction(
     envelope_, 
     alpha_, 
     interval, 
-    distance, 
+    prj_distance, 
     score,
 )
 
@@ -273,10 +256,10 @@ plotter.plot_envelope(
     legend_2=True,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
-    loc = (0.245, .75),
-    #loc = 'lower center',
+    #loc = (0.245, .75),
+    loc = 'upper right',
     fontsize = 13,
     columnspacing = 0.25,
     handletextpad = 0.125,
@@ -284,9 +267,13 @@ _ax.legend(
     ncol = 5,
 )
 
-plt.savefig(IMAGES / f"focal_prj_regions-{file_name}.pdf")
+leg.set_zorder(100)
+
+plt.savefig(IMAGES / f"{prj_distance}_prj_regions-{file_name}.pdf")
 
 plt.show()
+
+# ===============================================
 
 _fig, _ax = plt.subplots(
     figsize=(2, 4), 
@@ -311,7 +298,8 @@ plt.savefig(IMAGES / f"temporal_neighbors-{file_name}.pdf")
 
 plt.show()
 
-# Plot
+# ===============================================
+
 _fig, _ax = plt.subplots(
     figsize=(3.75, 2), 
     constrained_layout=True,
@@ -331,7 +319,7 @@ plt.savefig(IMAGES / f"spatial_neighbors-{file_name}.pdf")
 
 plt.show()
 
-distance = 'MBD'
+# ===============================================
 
 depth_score_, depth_rank_ = _fdu.get_depth(_depth, E_tr_p_[_fdu.idx_x_, :])
 
@@ -355,23 +343,27 @@ plotter.plot_enhanced_functional_boxplot(
     range_=[0, 71],
     CR=r"$\mathcal{{R}}^{{bxp}}_{{{}}}$",
     legend_1=False,
-    legend_2=False,
+    legend_2=True,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
-    loc = (0.3675, .55),
-    #loc = 'lower center',
+    #loc = (0.3675, .55),
+    loc = 'upper right',
     fontsize = 13,
     columnspacing = 0.25,
     handletextpad = 0.125,
     labelspacing = 0.125,
-    ncol = 1,
+    ncol = 5,
 )
 
-plt.savefig(IMAGES / f"{distance}_box_forecast-{file_name}.pdf")
+leg.set_zorder(100)
+
+plt.savefig(IMAGES / f"{fun_distance}_box_forecast-{file_name}.pdf")
 
 plt.show()
+
+# ===============================================
 
 depth_score_, depth_rank_ = _fdu.get_depth(_depth, F_tr_p_[_fdu.idx_x_, :])
 
@@ -398,7 +390,7 @@ plotter.plot_enhanced_functional_boxplot(
     legend_2=False,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
     loc = (0.3675, .55),
     #loc = 'lower center',
@@ -409,13 +401,16 @@ _ax.legend(
     ncol = 1,
 )
 
-plt.savefig(IMAGES / f"{distance}_box_forecast-{file_name}.pdf")
+leg.set_zorder(100)
+
+plt.savefig(IMAGES / f"{fun_distance}_box_realized-{file_name}.pdf")
 
 plt.show()
 
+# ===============================================
+
 depth_score_, depth_rank_ = _fdu.get_depth(_depth, _fdu.M_)
 
-# Calculate confidence intervals from Directional Quantiles
 f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
     M_, 
     depth_score_,
@@ -433,25 +428,29 @@ plotter.plot_enhanced_functional_boxplot(
     interval = 24,
     n = 720,
     range_=[0, 71],
-    CR=r"$\mathcal{{R}}^{{bxp}}_{{\alpha={}}}$",
-    legend_1=False,
+    CR=r"$\mathcal{{R}}^{{bxp}}_{{}}$",
+    legend_1=True,
     legend_2=False,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
-    loc = (0.0125, .775),
-    #loc = 'lower center',
+    #loc = (0.0125, .775),
+    loc = 'upper left',
     fontsize = 13,
     columnspacing = 0.25,
     handletextpad = 0.125,
     labelspacing = 0.125,
-    ncol = 5,
+    ncol = 1,
 )
 
-plt.savefig(IMAGES / f"{distance}_box_fused-{file_name}.pdf")
+leg.set_zorder(100)
+
+plt.savefig(IMAGES / f"{fun_distance}_box_fused-{file_name}.pdf")
 
 plt.show()
+
+# ===============================================
 
 INTERVALS = [0, 6, 12, 18, 24, 30]
 
@@ -464,6 +463,8 @@ pit_ = loader.pit(
     exp_description,
     VALIDATION,
 )
+
+# ===============================================
 
 INTERVAL = INTERVALS[0]
 LEAD = 24
@@ -478,12 +479,14 @@ plotter.plot_pit(
     _fig, _ax, pit_[:, INTERVAL:(INTERVAL + LEAD)].flatten(), 
     v = 0.4,
     bins = 10,
-    xlabel = 'PIT (from 6pm to 6pm + 24h)',
+    xlabel = 'PIT (from 6pm to +24h)',
 )
 
 plt.savefig(IMAGES / f"PIT-{resource}-{INTERVAL}-{LEAD}-{interval}.pdf")
 
 plt.show()
+
+# ===============================================
 
 INTERVAL = INTERVALS[4]
 LEAD = 24
@@ -498,16 +501,14 @@ plotter.plot_pit(
     _fig, _ax, pit_[:, INTERVAL:(INTERVAL + LEAD)].flatten(), 
     v = 0.4,
     bins = 10,
-    xlabel = 'PIT (from 6pm + 24h to 6pm + 48h)',
+    xlabel = 'PIT (from +24h to +48h)',
 )
 
 plt.savefig(IMAGES / f"PIT-{resource}-{INTERVAL}-{LEAD}-{interval}.pdf")
 
 plt.show()
 
-day = 215
-alpha_ = [0.1, 0.2, 0.3, 0.4]
-_depth = ModifiedBandDepth()
+# ===============================================
 
 F_curves_ = []
 E_curves_ = []
@@ -626,10 +627,14 @@ plotter.plot_zonal_dynamic_update(
     G_curves_, 
     dxs_, 
     dts_, 
-    range_=[0, 71],
+    range_=[0, 70],
     n = 220,
 )
+
+leg.set_zorder(100)
 
 plt.savefig(IMAGES / f"focal_update-{file_name}.pdf")
 
 plt.show()
+
+# ===============================================

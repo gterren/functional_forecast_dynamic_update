@@ -35,31 +35,27 @@ aggregation = "asset"
 
 # wind unbiased-025 {72: 1, 144: 4, 216: 1}
 # wind biased-025 {72: 2, 144: 1, 216: 2}
-exp_description="unbiased-025-1"
-_init = {72: 1, 144: 2, 216: 1}
-
-exp_description="unbiased-025-2"
-_init = {72: 1, 144: 3, 216: 3}
-
-exp_description="unbiased-025-3"
-_init = {72: 1, 144: 2, 216: 2}
-
 exp_description="unbiased-025-6"
 _init = {72: 3, 144: 4, 216: 1}
-
-# exp_description="biased-025"
-# _init = {72: 5, 144: 2, 216: 1}
+exp_description="unbiased-025-7"
+_init = {72: 3, 144: 4, 216: 2}
 
 # Blanco Canyon 18 112 in 176
 # Black Jack Creek Wind 17 289
-day = 112
-asset = 18              
-interval = 72
+# 10/120
+day = 120
+asset = 10                
+interval = 216
 
+score = 'FCS'
+prj_distance = "l2"
+fun_distance = 'MBD'
 alpha_ = [0.1, 0.2, 0.3, 0.4]
 _depth = ModifiedBandDepth()
 
-scale = 10
+scale = 2.5
+
+# ===============================================
 
 (
     F_tr_,
@@ -109,6 +105,8 @@ E_tr_biased_, E_ts_biased_ = loader.processed_dataset(
 
 print(E_tr_biased_.shape, E_ts_biased_.shape)
 
+# ===============================================
+
 hyper_, envelope_ = loader.hyperparameters(
     _init,
     resource,
@@ -123,18 +121,6 @@ hyper_.loc['length_scale_e'] = hyper_.loc['length_scale_f']*hyper_.loc['rho_e']
 hyper_.loc['length_scale_d'] = hyper_.loc['length_scale_f']*hyper_.loc['rho_d']
 print(hyper_)
 # print(envelope_)
-
-stats_, funcs_ = loader.get_asset_stats(
-    _init, 
-    resource, 
-    method, 
-    aggregation, 
-    exp_description, 
-    T, 
-    VALIDATION, 
-)
-# print(stats_)
-# print(funcs_)
 
 # ===============================================
 
@@ -187,6 +173,8 @@ M_ = _fdu.predict(
 )
 print(_fdu.xi, _fdu.ess)
 
+# ===============================================
+
 # Plotting variables
 e_biased_ = E_ts_biased_[day, :, asset]
 f_hat_ = F_ts_[day, interval:, asset]
@@ -195,16 +183,12 @@ x_ts_ = X_ts_[asset, :]
 e_ = E_ts_[day, :, asset]
 f_ = F_ts_[day, :interval, asset]
 
-
 M_int_, M_int_ds_ = _fdu.functional_downsampling(
     subsample=12, 
     n_basis=int(1.333*(T - interval)/12),
 )
 
-f_median_ext_, _upper, _lower = _fdu.ecdf_confidence_bands(
-    M_int_, 
-    alpha_,
-)
+# ===============================================
 
 f_wmedian_ext_, _wupper, _wlower = _fdu.weighted_ecdf_confidence_region(
     M_int_, 
@@ -212,51 +196,49 @@ f_wmedian_ext_, _wupper, _wlower = _fdu.weighted_ecdf_confidence_region(
     alpha_,
 )
 
-_fig, _ax = plt.subplots(
-    figsize=(7.5, 2.25), 
-    constrained_layout=True
-)
+# _fig, _ax = plt.subplots(
+#     figsize=(7.5, 2.25), 
+#     constrained_layout=True,
+# )
 
-plotter.plot_envelope(
-    _fig, 
-    _ax, 
-    palette_,
-    _wupper, 
-    _wlower, 
-    f_wmedian_ext_, 
-    f_, 
-    f_hat_, 
-    e_biased_, 
-    dx_,
-    dt_ = dt_ + 5, 
-    interval = interval,
-    n = 120,
-    color_med = palette_.loc[3, "ibm"],
-    CR=r"$\mathcal{{R}}^{{mar}}_{{{}}}$",
-    label = r"$\hat{\mu}_{med} (s)$",
-    range_ = [0, 287],
-    legend_1 = False,
-    legend_2 = True,
-)
+# plotter.plot_envelope(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _wupper, 
+#     _wlower, 
+#     f_wmedian_ext_, 
+#     f_, 
+#     f_hat_, 
+#     e_biased_, 
+#     dx_,
+#     dt_ = dt_ + 5, 
+#     interval = interval,
+#     n = 120,
+#     color_med = palette_.loc[3, "ibm"],
+#     CR=r"$\mathcal{{R}}^{{mar}}_{{{}}}$",
+#     label = r"$\hat{\mu}_{med} (s)$",
+#     range_ = [0, 287],
+#     legend_1 = False,
+#     legend_2 = True,
+# )
 
-_ax.legend(
-    frameon = False,
-    loc = (0.0125, .225),
-    #loc = 'lower center',
-    fontsize = 13,
-    columnspacing = 0.25,
-    handletextpad = 0.125,
-    labelspacing = 0.125,
-    ncol = 1,
-)
+# leg = _ax.legend(
+#     frameon = False,
+#     loc = (0.0125, .225),
+#     #loc = 'lower center',
+#     fontsize = 13,
+#     columnspacing = 0.25,
+#     handletextpad = 0.125,
+#     labelspacing = 0.125,
+#     ncol = 1,
+# )
 
-plt.savefig(IMAGES / f"median_mar_regions-{file_name}.pdf")
+# plt.savefig(IMAGES / f"median_mar_regions-{file_name}.pdf")
 
-plt.show()
+# plt.show()
 
-# Samples in each confidence band
-score = 'FCS'
-distance = 'MBD'
+# ===============================================
 
 f_deepest_ext_, _upper, _lower = _fdu.functional_confidence_region(
     _depth, 
@@ -264,56 +246,54 @@ f_deepest_ext_, _upper, _lower = _fdu.functional_confidence_region(
     alpha_, 
 )
 
-_fig, _ax = plt.subplots(
-    figsize=(7.5, 2.25), 
-    constrained_layout=True
-)
+# _fig, _ax = plt.subplots(
+#     figsize=(7.5, 2.25), 
+#     constrained_layout=True,
+# )
 
-plotter.plot_envelope(
-    _fig, 
-    _ax, 
-    palette_,
-    _upper, 
-    _lower, 
-    f_deepest_ext_, 
-    f_, 
-    f_hat_, 
-    e_biased_, 
-    dx_, 
-    dt_ = dt_ + 5, 
-    interval = interval,
-    n = 120,
-    color_med = palette_.loc[2, "ibm"],
-    label = r"$\hat{\mu}_{deep} (s)$",
-    CR=r"$\mathcal{{R}}^{{fun}}_{{{}}}$",
-    range_ =[0, 287],
-    legend_1 = False,
-    legend_2 = True,
-)
+# plotter.plot_envelope(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _upper, 
+#     _lower, 
+#     f_deepest_ext_, 
+#     f_, 
+#     f_hat_, 
+#     e_biased_, 
+#     dx_, 
+#     dt_ = dt_ + 5, 
+#     interval = interval,
+#     n = 120,
+#     color_med = palette_.loc[2, "ibm"],
+#     label = r"$\hat{\mu}_{deep} (s)$",
+#     CR=r"$\mathcal{{R}}^{{fun}}_{{{}}}$",
+#     range_ =[0, 287],
+#     legend_1 = False,
+#     legend_2 = True,
+# )
 
-_ax.legend(
-    frameon = False,
-    loc = (0.0125, .2),
-    #loc = 'lower center',
-    fontsize = 13,
-    columnspacing = 0.25,
-    handletextpad = 0.125,
-    labelspacing = 0.125,
-    ncol = 1,
-)
+# leg = _ax.legend(
+#     frameon = False,
+#     loc = (0.0125, .2),
+#     #loc = 'lower center',
+#     fontsize = 13,
+#     columnspacing = 0.25,
+#     handletextpad = 0.125,
+#     labelspacing = 0.125,
+#     ncol = 1,
+# )
 
-plt.savefig(IMAGES / f"{distance}_fun_regions-{file_name}.pdf")
+# plt.savefig(IMAGES / f"{fun_distance}_fun_regions-{file_name}.pdf")
 
-plt.show()
+# plt.show()
 
-# Samples in each confidence band
-score = 'FCS'
-distance = "fknn"
+# ===============================================
 
 J_ = _fdu.focal_curve_envelope(
     None, 
     M_int_, 
-    dist =distance,
+    dist = prj_distance,
     max_iter = 100,
 )
 
@@ -321,7 +301,7 @@ k_ = get_band_fraction(
     envelope_, 
     alpha_, 
     interval, 
-    distance, 
+    prj_distance, 
     score,
 )
 
@@ -332,7 +312,7 @@ f_focal_ext_, _upper, _lower = _fdu.focal_envelope_confidence_region(
 
 _fig, _ax = plt.subplots(
     figsize=(7.5, 2.25), 
-    constrained_layout=True
+    constrained_layout=True,
 )
 
 plotter.plot_envelope(
@@ -357,10 +337,10 @@ plotter.plot_envelope(
     legend_2 = True,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
-    loc = (0.245, .75),
-    #loc = 'lower center',
+    #loc = (0.245, .75),
+    loc = 'lower left',
     fontsize = 13,
     columnspacing = 0.25,
     handletextpad = 0.125,
@@ -368,14 +348,17 @@ _ax.legend(
     ncol = 5,
 )
 
-plt.savefig(IMAGES / f"focal_prj_regions-{file_name}.pdf")
+leg.set_zorder(100)
+
+plt.savefig(IMAGES / f"{prj_distance}_prj_regions-{file_name}.pdf")
 
 plt.show()
 
+# ===============================================
 
 _fig, _ax = plt.subplots(
     figsize=(7.5, 2.25), 
-    constrained_layout=True
+    constrained_layout=True,
 )
 
 plotter.plot_density_heatmap(
@@ -393,16 +376,16 @@ plotter.plot_density_heatmap(
     dt_ = dt_ + 5,
     interval = interval,
     range_ = [0, 287],
-    colorbar_pos = [640, 75, 150, 5],
-    colorbar = True,
-    legend_1 = False,
+    colorbar_pos = [650, 75, 150, 5],
+    colorbar = False,
+    legend_1 = True,
     legend_2 = False,
 )
 
-_ax.legend(
+leg = _ax.legend(
     frameon = False,
-    loc = (0.0125, .5),
-    #loc = 'lower center',
+    #loc = (0.0125, .5),
+    loc = 'lower left',
     fontsize = 13,
     columnspacing = 0.25,
     handletextpad = 0.125,
@@ -410,9 +393,13 @@ _ax.legend(
     ncol = 1,
 )
 
+leg.set_zorder(100)
+
 plt.savefig(IMAGES / f"heatmap-{file_name}.pdf")
 
 plt.show()
+
+# ===============================================
 
 pit_ = loader.pit(
     _init, 
@@ -424,6 +411,8 @@ pit_ = loader.pit(
     path_to_validation=VALIDATION
 )
 print(pit_.shape)
+
+# ===============================================
 
 INTERVAL = 0
 LEAD = 36
@@ -438,12 +427,14 @@ plotter.plot_pit(
     _fig, _ax, pit_[:, INTERVAL:(INTERVAL + LEAD)].flatten(), 
     v = 0.4,
     bins = 10,
-    xlabel = 'PIT (from 6am to 9am)'
+    xlabel = 'PIT (from 6pm to 9pm)'
 )
 
 plt.savefig(IMAGES / f"PIT-{resource}-{INTERVAL}-{LEAD}-{interval}.pdf")
 
 plt.show()
+
+# ===============================================
 
 INTERVAL = 36
 LEAD = 36
@@ -458,198 +449,206 @@ plotter.plot_pit(
     _fig, _ax, pit_[:, INTERVAL:(INTERVAL + LEAD)].flatten(), 
     v = 0.4,
     bins = 10,
-    xlabel = 'PIT (from 9am to 12pm)'
+    xlabel = 'PIT (from 9pm to 12am)'
 )
 
 plt.savefig(IMAGES / f"PIT-{resource}-{INTERVAL}-{LEAD}-{interval}.pdf")
 
 plt.show()
 
-_fig, _ax = plt.subplots(
-    figsize=(2, 4), 
-    constrained_layout=True,
-)
+# ===============================================
 
-plotter.scenarios_frequency_dates(
-    _fig, 
-    _ax, 
-    palette_,
-    _fdu.idx_fed_, 
-    _fdu.idx_x_,
-    T_tr_[:, interval], 
-    _fdu.date,
-    scale = scale,
-    colorbar = True,
-)
+# _fig, _ax = plt.subplots(
+#     figsize=(2, 4), 
+#     constrained_layout=True,
+# )
 
-plt.savefig(IMAGES / f"temporal_neighbors-{file_name}.pdf")
+# plotter.scenarios_frequency_dates(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _fdu.idx_fed_, 
+#     _fdu.idx_x_,
+#     T_tr_[:, interval], 
+#     _fdu.date,
+#     scale = scale,
+#     colorbar = True,
+# )
 
-plt.show()
+# plt.savefig(IMAGES / f"temporal_neighbors-{file_name}.pdf")
 
-_fig, _ax = plt.subplots(
-    figsize=(7.5, 6.25), 
-    constrained_layout=True,
-)
+# plt.show()
 
-plotter.selected_scenarios_heatmap(
-    _fig, 
-    _ax, 
-    palette_,
-    _fdu._haversine_dist, 
-    _fdu.idx_fed_, 
-    _fdu.idx_x_local_,
-    _fdu.d_x_,
-    _fdu.x_, 
-    T_tr_[:, interval], 
-    X_ts_,
-    _fdu.date,
-    colorbar = True,
-)
+# ===============================================
 
-plt.savefig(IMAGES / f"spatiotemporal_heatmap-{file_name}.pdf")
+# _fig, _ax = plt.subplots(
+#     figsize=(7.5, 6.25), 
+#     constrained_layout=True,
+# )
 
-plt.show()
+# plotter.selected_scenarios_heatmap(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _fdu._haversine_dist, 
+#     _fdu.idx_fed_, 
+#     _fdu.idx_x_local_,
+#     _fdu.d_x_,
+#     _fdu.x_, 
+#     T_tr_[:, interval], 
+#     X_ts_,
+#     _fdu.date,
+#     colorbar = True,
+# )
 
-# Calculate confidence intervals from Directional Quantiles
-depth_score_, depth_rank_ = _fdu.get_depth(_depth, E_tr_biased_[_fdu.idx_x_, :])
+# plt.savefig(IMAGES / f"spatiotemporal_heatmap-{file_name}.pdf")
 
-f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
-    E_tr_biased_[_fdu.idx_x_, :], 
-    depth_score_,
-)
+# plt.show()
 
-_fig, _ax = plt.subplots(
-    figsize=(7.5, 2.25), 
-    constrained_layout=True,
-)
+# ===============================================
 
-plotter.plot_enhanced_functional_boxplot(
-    _fig, 
-    _ax, 
-    palette_,
-    _upper, 
-    _lower, 
-    f_deepest_ext_, 
-    f_, 
-    f_hat_, 
-    e_biased_, 
-    dx_,
-    dt_ = dt_ + 5, 
-    interval = interval,
-    CR=r"$\mathcal{{R}}^{{bxp}}_{{\alpha={}}}$",
-    n = 120,
-    range_ = [0, 287],
-    legend_1 = True,
-    legend_2 = False,
-)
+# depth_score_, depth_rank_ = _fdu.get_depth(_depth, E_tr_biased_[_fdu.idx_x_, :])
 
-_ax.legend(
-    frameon = False,
-    loc = (0.3675, .55),
-    #loc = 'lower center',
-    fontsize = 13,
-    columnspacing = 0.25,
-    handletextpad = 0.125,
-    labelspacing = 0.125,
-    ncol = 1,
-)
+# f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
+#     E_tr_biased_[_fdu.idx_x_, :], 
+#     depth_score_,
+# )
 
-plt.savefig(IMAGES / f"{distance}_box_forecast-{file_name}.pdf")
+# _fig, _ax = plt.subplots(
+#     figsize=(7.5, 2.25), 
+#     constrained_layout=True,
+# )
 
-plt.show()
+# plotter.plot_enhanced_functional_boxplot(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _upper, 
+#     _lower, 
+#     f_deepest_ext_, 
+#     f_, 
+#     f_hat_, 
+#     e_biased_, 
+#     dx_,
+#     dt_ = dt_ + 5, 
+#     interval = interval,
+#     CR=r"$\mathcal{{R}}^{{bxp}}_{{{}}}$",
+#     n = 120,
+#     range_ = [0, 287],
+#     legend_1 = True,
+#     legend_2 = False,
+# )
 
-# Calculate confidence intervals from Directional Quantiles
-depth_score_, depth_rank_ = _fdu.get_depth(_depth, F_tr_[_fdu.idx_x_, :])
+# leg = _ax.legend(
+#     frameon = False,
+#     loc = (0.3675, .55),
+#     #loc = 'lower center',
+#     fontsize = 13,
+#     columnspacing = 0.25,
+#     handletextpad = 0.125,
+#     labelspacing = 0.125,
+#     ncol = 1,
+# )
 
-f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
-    F_tr_[_fdu.idx_x_, :], 
-    depth_score_,
-)
+# plt.savefig(IMAGES / f"{fun_distance}_box_forecast-{file_name}.pdf")
 
-_fig, _ax = plt.subplots(
-    figsize=(7.5, 2.25), 
-    constrained_layout=True,
-)
+# plt.show()
 
-plotter.plot_enhanced_functional_boxplot(
-    _fig, 
-    _ax, 
-    palette_,
-    _upper, 
-    _lower, 
-    f_deepest_ext_, 
-    f_, 
-    f_hat_, 
-    e_biased_, 
-    dx_,
-    dt_ = dt_ + 5, 
-    interval = interval,
-    CR=r"$\mathcal{{R}}^{{bxp}}_{{\alpha={}}}$",
-    n = 120,
-    range_ = [0, 287],
-    legend_1 = False,
-    legend_2 = False,
-)
+# ===============================================
 
-_ax.legend(
-    frameon = False,
-    loc = (0.25, .625),
-    #loc = 'lower center',
-    fontsize = 13,
-    columnspacing = 0.25,
-    handletextpad = 0.125,
-    labelspacing = 0.125,
-    ncol = 3,
-)
+# depth_score_, depth_rank_ = _fdu.get_depth(_depth, F_tr_[_fdu.idx_x_, :])
 
-plt.savefig(IMAGES / f"{distance}_box_realized-{file_name}.pdf")
+# f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
+#     F_tr_[_fdu.idx_x_, :], 
+#     depth_score_,
+# )
 
-plt.show()
+# _fig, _ax = plt.subplots(
+#     figsize=(7.5, 2.25), 
+#     constrained_layout=True,
+# )
 
-# Calculate confidence intervals from Directional Quantiles
-depth_score_, depth_rank_ = _fdu.get_depth(_depth, M_)
+# plotter.plot_enhanced_functional_boxplot(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _upper, 
+#     _lower, 
+#     f_deepest_ext_, 
+#     f_, 
+#     f_hat_, 
+#     e_biased_, 
+#     dx_,
+#     dt_ = dt_ + 5, 
+#     interval = interval,
+#     CR=r"$\mathcal{{R}}^{{bxp}}_{{{}}}$",
+#     n = 120,
+#     range_ = [0, 287],
+#     legend_1 = False,
+#     legend_2 = False,
+# )
 
-f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
-    M_, 
-    depth_score_,
-)
+# leg = _ax.legend(
+#     frameon = False,
+#     loc = (0.25, .625),
+#     #loc = 'lower center',
+#     fontsize = 13,
+#     columnspacing = 0.25,
+#     handletextpad = 0.125,
+#     labelspacing = 0.125,
+#     ncol = 3,
+# )
 
-_fig, _ax = plt.subplots(
-    figsize=(7.5, 2.25), 
-    constrained_layout=True,
-)
+# plt.savefig(IMAGES / f"{fun_distance}_box_realized-{file_name}.pdf")
 
-plotter.plot_enhanced_functional_boxplot(
-    _fig, 
-    _ax, 
-    palette_,
-    _upper, 
-    _lower, 
-    f_deepest_ext_, 
-    f_, 
-    f_hat_, 
-    e_biased_, 
-    dx_,
-    dt_ = dt_ + 5, 
-    interval = interval,
-    CR=r"$\mathcal{{R}}^{{bxp}}_{{\alpha={}}}$",
-    n = 120,
-    range_ = [0, 287],
-    legend_1 = False,
-    legend_2 = True,
-)
+# plt.show()
 
-_ax.legend(
-    frameon = False,
-    loc = (0.0125, .775),
-    #loc = 'lower center',
-    fontsize = 13,
-    columnspacing = 0.25,
-    handletextpad = 0.125,
-    labelspacing = 0.125,
-    ncol = 5,
-)
+# ===============================================
 
-plt.savefig(IMAGES / f"{distance}_box_fused-{file_name}.pdf")
 
-plt.show()
+# depth_score_, depth_rank_ = _fdu.get_depth(_depth, M_)
+
+# f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
+#     M_, 
+#     depth_score_,
+# )
+
+# _fig, _ax = plt.subplots(
+#     figsize=(7.5, 2.25), 
+#     constrained_layout=True,
+# )
+
+# plotter.plot_enhanced_functional_boxplot(
+#     _fig, 
+#     _ax, 
+#     palette_,
+#     _upper, 
+#     _lower, 
+#     f_deepest_ext_, 
+#     f_, 
+#     f_hat_, 
+#     e_biased_, 
+#     dx_,
+#     dt_ = dt_ + 5, 
+#     interval = interval,
+#     CR=r"$\mathcal{{R}}^{{bxp}}_{{{}}}$",
+#     n = 120,
+#     range_ = [0, 287],
+#     legend_1 = False,
+#     legend_2 = True,
+# )
+
+# leg = _ax.legend(
+#     frameon = False,
+#     loc = (0.0125, .775),
+#     #loc = 'lower center',
+#     fontsize = 13,
+#     columnspacing = 0.25,
+#     handletextpad = 0.125,
+#     labelspacing = 0.125,
+#     ncol = 5,
+# )
+
+# plt.savefig(IMAGES / f"{fun_distance}_box_fused-{file_name}.pdf")
+
+# plt.show()

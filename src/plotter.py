@@ -5,10 +5,11 @@ import pandas as pd
 import geopandas as gpd
 import networkx as nx
 
-import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import seaborn as sns
 import matplotlib.pyplot as plt
+
+from matplotlib.colors import PowerNorm, LogNorm
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -1109,10 +1110,15 @@ def plot_density_heatmap(
     X_, Y_ = np.meshgrid(dt_[interval:], (b_[1:] + b_[:-1]) / 2.0)
     
     _cmap = sns.color_palette("rocket_r", as_cmap = True)
-    _ax.pcolormesh(X_, Y_, Z_, 
-                   cmap = _cmap, alpha = 1., 
-                   vmin = 0., 
-                   vmax = .25)
+
+    _ax.pcolormesh(
+        X_, Y_, Z_, 
+        cmap = _cmap, 
+        alpha = 1., 
+        norm = PowerNorm(gamma = 0.7, vmin = 0., vmax = .25),
+        #vmin = 0., 
+        #vmax = .15,
+    )
 
     _ax.axvline(
         dt_[interval - 1], 
@@ -1420,6 +1426,7 @@ def plot_dynamic_update(
     dt_,
     legend=False,
     colorbar=True,
+    colorbar_pos=[285, 75, 150, 5],
     label=r"$\bar{f} (s)$",
     n = 120,
     range_=[],
@@ -1483,7 +1490,7 @@ def plot_dynamic_update(
     if colorbar:
         cbar = _fig.colorbar(
             cm.ScalarMappable(_norm, _cmap),
-            cax=_ax.inset_axes([650, 75, 150, 5], transform=_ax.transData),
+            cax=_ax.inset_axes(colorbar_pos, transform=_ax.transData),
             orientation="horizontal",
         )
 
@@ -2525,12 +2532,12 @@ def plot_pit(_fig, _ax, u_,
               v=0.5,
               xlabel = 'PIT'):
     
-    vmin= -v
-    vmax= v
+    #vmin= -v
+    #vmax= v
     KS_stat = KS(u_)
 
     u_ = np.sort(u_)
-    n = len(u_)
+    #n = len(u_)
 
     # --- Histogram ---
     counts_, bins_, patches = _ax.hist(
@@ -2545,28 +2552,8 @@ def plot_pit(_fig, _ax, u_,
 
     # deviation from perfect calibration
     deviation = counts_ - 1.
-    print(deviation.min(), deviation.max())
-
-    # # --- Compute KS deviation at bin centers ---
-    # bin_centers = 0.5 * (bins_[:-1] + bins_[1:])
-
-    # # empirical CDF evaluated at bin centers
-    # ecdf_interp = np.searchsorted(u_, bin_centers, side='right') / n
-
-    # deviation = ecdf_interp - bin_centers  # signed deviation
-    print(deviation)
-    # # --- Colormap centered at 0 ---
-    # max_dev = np.max(np.abs(ks_deviation))
-    # print(max_dev)
-    # normalize deviations for colormap
-    # norm = mcolors.Normalize(vmin=vmin, 
-    #                          vcenter=0,
-    #                          vmax=vmax)
-    # norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
-    # cmap = cm.get_cmap("coolwarm")
 
     for patch, dev in zip(patches, deviation):
-        #patch.set_facecolor(cmap(norm(dev)))
         patch.set_facecolor('lightgray')
 
     # --- Reference line ---
@@ -2588,10 +2575,13 @@ def plot_pit(_fig, _ax, u_,
     _ax.tick_params(axis="both", labelsize=12)
 
     # --- Annotate KS statistic ---
-    _ax.text(0.25, 0.95,
-             f"$D_{{KS}}$ = {KS_stat:.3f}",
-             transform=_ax.transAxes,
-             verticalalignment='top')
+    _ax.text(
+        0.25, 0.95,
+        f"$D_{{KS}}$ = {KS_stat:.3f}",
+        size=12,
+        transform=_ax.transAxes,
+        verticalalignment='top'
+)
 
 def plot_zone_neighborhood(fig, ax, palette_, X_, regions_, idx_, region):
     
@@ -2631,7 +2621,7 @@ def plot_zone_neighborhood(fig, ax, palette_, X_, regions_, idx_, region):
     ax.tick_params(axis='y', length=0, labelsize=11)
     ax.tick_params(axis='x', labelsize=11)
 
-    ax.set_ylabel("Neighborhood (%)", fontsize = 12)
+    ax.set_ylabel("Neighbors", fontsize = 12)
     #ax.set_ylim(0, 100)
 
 
@@ -2692,7 +2682,7 @@ def plot_zonal_dynamic_update(
     
     _ax.set_ylim(0, 100)
     _ax.set_ylabel("Capacity Factor (%)", size=14)
-    #_ax.set_xlim(dt_[range_[0]], dt_[range_[1]])
+    _ax.set_xlim(dt[range_[0]], dt[range_[1]])
 
     _ax.tick_params(axis="both", labelsize=12)
 
