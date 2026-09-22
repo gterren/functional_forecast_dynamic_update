@@ -1,13 +1,13 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=validate_zone_ffc_mpi-wind
+#SBATCH --job-name=wind-validate_asset_arima_mpi
 #SBATCH --time=24:00:00
-##SBATCH --nodes=1
-#SBATCH --ntasks-per-node=12
-#SBATCH -p batch
+#SBATCH --ntasks-per-node=10
+##SBATCH -p batch
 
+##SBATCH --nodes=1
 ##SBATCH --exclusive
-##SBATCH -p largemem
+#SBATCH -p largemem
 ##SBATCH --mem=187G
 ##SBATCH --output=res.txt
 ##SBATCH --mail-type=BEGIN,END
@@ -20,9 +20,13 @@ cd /home/gterren/dynamic_update/functional_forecast_dynamic_update/scripts
 
 source activate fda
 
-mpirun -np 12 python -u validate_zone_ffc_mpi.py wind fusion $1 $2 0.25 0 biased-025-C0
-#mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 0 biased-025
-#mpirun -np 12 python -u validate_asset_ffc_mpi.py solar fusion $1 $2 0.25 1 unbiased-025
+#mpirun -np 12 python -u validate_zone_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased-025-C0-6
+#mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.5 1  unbiased-05-9
+#mpirun -np 12 python -u validate_asset_ffc_mpi.py solar fusion $1 $2 0.25 1 unbiased-025-6
+
+#mpirun -np 10 python -u validate_asset_prophet_mpi.py wind prophet $1 $2 1 unbiased
+#mpirun -np 10 python -u validate_asset_daref_mpi.py wind daref $1 $2 1 unbiased-2
+mpirun -np 10 python -u validate_asset_arima_mpi.py wind arima $1 $2 1 unbiased
 
 # mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased-025-v30 disnance N kernel Y D fixed
 # mpirun -np 12 python -u validate_asset_ffc_mpi.py wind fusion $1 $2 0.25 1 unbiased-025-v31 disnance Y kernel N D fixed

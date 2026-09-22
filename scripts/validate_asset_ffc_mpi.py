@@ -102,7 +102,7 @@ def _run_ffc(
 
     _hyperparams = {**_fixed_hyper[time], **_opt_params,}
 
-    _hyperparams['length_scale_f'] = 1.0 / _hyperparams.pop('tau')
+    _hyperparams['length_scale_f'] = 1. / _hyperparams.pop('tau')
     _hyperparams['length_scale_e'] = _hyperparams.pop('rho_e') * _hyperparams['length_scale_f']
     _hyperparams['length_scale_d'] = _hyperparams.pop('rho_d') * _hyperparams['length_scale_f']
 
@@ -117,11 +117,11 @@ def _run_ffc(
         pit_ = _empirical_PIT(f_hat_, M_hat_.T, seed = 1234)
 
         # Confidence bands from depth function
-        f_deepest_ = _fdu.depth_confidence_bands(ModifiedBandDepth(), M_hat_, ALPHAS, ALPHAS)[0]
+        f_deepest_ = _fdu.adjusted_functional_confidence_region(ModifiedBandDepth(), M_hat_, ALPHAS, ALPHAS)[0]
 
         # Confidence bands from marginal empirical density function
-        f_median_, _upper, _lower = _fdu.weighted_ecdf_confidence_bands(M_hat_, _fdu.w_prime_, ALPHAS)
-        f_median_ = f_median_[:, 0]
+        f_median_, _upper, _lower = _fdu.weighted_ecdf_confidence_region(M_hat_, _fdu.w_prime_, ALPHAS)
+
         # Scoring rules
         es = _energy_score(M_hat_, f_hat_)
         wis = _weighted_interval_score(f_hat_, _fdu.f_focal_, _lower, _upper, ALPHAS).mean()
@@ -187,14 +187,14 @@ def _run_ffc(
 
 # Run FFC experiments for a given process and set of parameters, and compute confidence bands and scoring rules.
 def _run_ffc_envelope(
-        process_,
-        _data,
-        _bo_params,
-        distances_,
-        fractions_,
-        alpha_,
-        k_,
-        time
+    process_,
+    _data,
+    _bo_params,
+    distances_,
+    fractions_,
+    alpha_,
+    k_,
+    time
 ):
 
     asset, day = process_
@@ -240,10 +240,10 @@ def _run_ffc_envelope(
     f_hat_ = F_ts_[day, time:, asset]
 
     _opt_params = _bo_params.copy()
+    
+    _hyperparams = {**_fixed_hyper[time], **_opt_params}
 
-    _hyperparams = {**_fixed_hyper[time], **_opt_params,}
-
-    _hyperparams['length_scale_f'] = 1.0 / _hyperparams.pop('tau')
+    _hyperparams['length_scale_f'] = 1. / _hyperparams.pop('tau')
     _hyperparams['length_scale_e'] = _hyperparams.pop('rho_e') * _hyperparams['length_scale_f']
     _hyperparams['length_scale_d'] = _hyperparams.pop('rho_d') * _hyperparams['length_scale_f']
 
@@ -253,7 +253,7 @@ def _run_ffc_envelope(
         # Confidence bands from depth function
         M_hat_int_, M_hat_int_ds_ = _fdu.functional_downsampling(
             subsample = 12,
-            n_basis = 20,
+            n_basis = int(1.75*(288 - time)/12),
         )
 
         _depth = ModifiedBandDepth()
@@ -266,36 +266,37 @@ def _run_ffc_envelope(
             if (distance == 'ECDF'):
 
                 # Confidence bands from marginal empirical density function
-                f_median_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(
-                    M_hat_, 
+                f_median_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_region(
+                    M_hat_int_, 
                     _fdu.w_prime_, 
-                    alpha_
+                    alpha_,
                 )
 
-                f_median_ = f_median_[:, 0]
-
                 for alpha in alpha_:
-                    FIS_ecdf = _interval_score(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'], alpha).mean()
-                    FCS_ecdf = _coverage_score(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'])
-                    SCP_ecdf = _simultaneous_coverage(f_hat_, _lower_ecdf[f'{alpha}'], _upper_ecdf[f'{alpha}'])
+                    FIS_ecdf = _interval_score(f_hat_, _lower_ecdf[f'{alpha}'][1:], _upper_ecdf[f'{alpha}'][1:], alpha).mean()
+                    FCS_ecdf = _coverage_score(f_hat_, _lower_ecdf[f'{alpha}'][1:], _upper_ecdf[f'{alpha}'][1:])
+                    SCP_ecdf = _simultaneous_coverage(f_hat_, _lower_ecdf[f'{alpha}'][1:], _upper_ecdf[f'{alpha}'][1:])
 
                     # Save results
                     results_.append([time, asset, day, alpha, 1, 'ECDF', FIS_ecdf, FCS_ecdf, SCP_ecdf])
 
-                f_ = f_median_
+                f_ = f_median_[1:]
 
             # depth-based envelope
             if (distance == 'MBD'):
 
                 for fraction in fractions_:
-                    if fraction is not None:
-                        k_ = [fraction, fraction, fraction, fraction]
 
-                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(
+                    # a shared grid value overrides the per-alpha k_ handed in by
+                    # the test stage; bind it locally so the next distance in
+                    # distances_ still sees the caller's k_
+                    k_mbd_ = list(k_) if fraction is None else [fraction]*len(alpha_)
+
+                    f_deepest_, _upper_depth, _lower_depth = _fdu.adjusted_functional_confidence_region(
                         _depth, 
                         M_hat_int_, 
                         alpha_, 
-                        k_
+                        k_mbd_,
                     )
 
                     for alpha in alpha_:
@@ -309,15 +310,23 @@ def _run_ffc_envelope(
                 f_ = f_deepest_[1:]
 
             # Focal curve envelope
-            if (distance == 'fknn'):
-
-                J_hat_ = _fdu.focal_curve_envelope(_depth, M_hat_int_, distance, max_iter = 100)
+            if (distance == 'fknn') or (distance == 'l2'):
 
                 for fraction in fractions_:
-                    if fraction is not None:
-                        k_ = [fraction, fraction, fraction, fraction]
 
-                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_bands(alpha_, k_)
+                    k_prj_ = list(k_) if fraction is None else [fraction]*len(alpha_)
+
+                    J_hat_ = _fdu.focal_curve_envelope(
+                        None,
+                        M_hat_int_,
+                        dist=distance,
+                        max_iter = 100,
+                    )
+                    
+                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_region(
+                        alpha_, 
+                        k_prj_,
+                    )
 
                     for alpha in alpha_:
                         FIS_focal = _interval_score(f_hat_, _lower_focal[f'{alpha}'][1:], _upper_focal[f'{alpha}'][1:], alpha).mean()
@@ -632,9 +641,9 @@ if resource == 'wind':
 
     # Fixed parameters depending on interval for wind
     _fixed_hyper = {
-        72:  {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
-        144: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
-        216: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        72:  {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.025, 'kappa': 150},
+        144: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.025, 'kappa': 150},
+        216: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.025, 'kappa': 150},
     }
 
     # Hyperparameter combinations
@@ -651,20 +660,20 @@ elif resource == 'solar':
 
     # Fixed parameters depending on interval for solar
     _fixed_hyper = {
-        120: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
-        132: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
-        144: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
-        168: {'p_fusion': 0.75, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.001, 'kappa': 150},
+        120: {'p_fusion': 0.9, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.01, 'kappa': 150},
+        132: {'p_fusion': 0.9, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.01, 'kappa': 150},
+        144: {'p_fusion': 0.9, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.01, 'kappa': 150},
+        168: {'p_fusion': 0.9, 'forget_rate_f': 0.125, 'forget_rate_e': 1, 'lookahead_rate': 4, 'tau': 0.01, 'kappa': 150},
     }
 
     # Hyperparameter combinations
     _hyper = {
-        'rho_e':   [1e-5,  1000.,  'log'],   # λ_e / λ_f
-        'rho_d':   [1e-5,  1000.,  'log'],   # λ_d / λ_f
-        #'tau':     [1e-5,  1000.,  'log'],   # temperature = 1 / λ_f
-        'kappa_0': [150,   5000,   'log'],
-        'nu':      [2,     12,     'linear'],
-        'sigma':   [0.,    1.,     'linear'],
+        'rho_e':    [1e-5,  1000.,  'log'],   # λ_e / λ_f
+        'rho_d':    [1e-5,  1000.,  'log'],   # λ_d / λ_f
+        #'p_fusion': [0.5,   1.,     'linear'],   
+        'kappa_0':  [150,   5000,   'log'],
+        'nu':       [2,     12,     'linear'],
+        'sigma':    [0.,    1.,     'linear'],
     }
 
 else:
@@ -738,6 +747,7 @@ if (RANK == 0) and (HYPERPARAMETERS == True):
     print(f'[Resource {resource}][Method {method}][Horizon {time}h][Initialization {init}]')
     print('----- HYPERPARAMETERS VALIDATION ----')
 
+
 if (RANK != 0) and (HYPERPARAMETERS == True):
     # Disable Optuna logging for non-master ranks to avoid cluttering output
     optuna.logging.disable_default_handler()
@@ -768,31 +778,39 @@ _func = partial(
     lambda_0=lambda_0
 )
 
-# Optimize hyperparameters: only rank 0 runs the Optuna loop; the other
-# ranks call the objective the same number of times so they participate
-# in the bcast/Barrier/gather collectives inside it.
-if RANK == 0:
-    _bo.optimize(_func, n_trials=N_bo_iter, n_jobs=1)
-else:
-    for _ in range(N_bo_iter):
-        _func(None)
+# it while another runs it deadlocks.
+if (HYPERPARAMETERS == True):
+    if RANK == 0:
+        _bo.optimize(_func, n_trials=N_bo_iter, n_jobs=1)
+    else:
+        for _ in range(N_bo_iter):
+            _func(None)
+
+_best_hyper = None
+best_ks = None
 
 if (RANK == 0) and (HYPERPARAMETERS == True):
-
     print('----- HYPERPARAMETERS TEST -----')
     # Retrieve best hyperparameters
     best_ks = _bo.best_value
     _best_hyper = _bo.best_params
-    print(best_ks)
-    print(_best_hyper)
-    print(_fixed_hyper[time])
-else:
-    best_ks = None
-    _best_hyper = None
+
+if (HYPERPARAMETERS == False):
+    _df = pd.read_csv(VALIDATION / f'{resource}/{resource}_{method}_asset-hyper-{description}.csv')
+    _row = _df[(_df["initialization"] == init) & (_df["time"] == time)].iloc[0]
+    _best_hyper = {
+        k: int(_row[k]) if k in ("kappa_0", "nu") else float(_row[k]) 
+        for k in ["rho_e", "rho_d", "kappa_0", "nu", "sigma"] 
+    }
+
+# Broadcast best hyperparameters to all ranks
+_best_hyper = COMM.bcast(_best_hyper, root=0)
+
+print(best_ks)
+print(_best_hyper)
+print(_fixed_hyper[time])
 
 if (HYPERPARAMETERS == True):
-    # Broadcast best hyperparameters to all ranks
-    _best_hyper = COMM.bcast(_best_hyper, root=0)
 
     # Run FFC experiments in parallel
     ks, pit_, psr_, stat_, func_ = _run_ffc_parallel_mpi(
@@ -802,6 +820,7 @@ if (HYPERPARAMETERS == True):
         time,
         lambda_0
     )
+
 
 if (RANK == 0) and (HYPERPARAMETERS == True):
 
@@ -913,97 +932,102 @@ if (RANK == 0) and (HYPERPARAMETERS == True):
     func_df.to_csv(func_path, index = False)
     print(f"Saved functions to {func_path}")
 
-if (RANK == 0) and (ENVELOPE == True):
-    print('----- ENVELOPE VALIDATION -----')
 
-prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
-    _data,
-    _best_hyper,
-    processes_val_,
-    fractions_ = np.linspace(0.1, 1., 19),
-    alpha_ = [0.1, 0.2, 0.3, 0.4],
-    distances_ = ['MBD', 'fknn'],
-    time = time
-)
+if ENVELOPE == True:
 
-# Gather all local results
-prob_results = COMM.gather(prob_local_results, root=0)
+    if RANK == 0:
+        print('----- ENVELOPE VALIDATION -----')
 
-if (RANK == 0) and (ENVELOPE == True):
+    fractions_ = [0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.175, 0.2, 0.225, 0.25, 0.275, 0.3, 0.325, 0.35, 0.375, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.]
 
-    # Only root processes all gathered result
-    prob_results = pd.DataFrame(
-        np.concatenate(prob_results, axis=0), columns = [
-            'time',
-            'asset',
-            'day',
-            'alpha',
-            'fraction',
-            'distance',
-            'FIS',
-            'FCS',
-            'SCP'
-        ]
+    prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
+        _data,
+        _best_hyper,
+        processes_val_,
+        #fractions_ = np.linspace(0.1, 1., 19),
+        fractions_ = fractions_,
+        alpha_ = [0.1, 0.2, 0.3, 0.4],
+        distances_ = ['MBD', 'fknn', 'l2'],
+        time = time
     )
 
-    prob_results['FIS'] = prob_results['FIS'].astype(float)
-    prob_results['FCS'] = prob_results['FCS'].astype(float)
-    prob_results['SCP'] = prob_results['SCP'].astype(float)
+    # Gather all local results
+    prob_results = COMM.gather(prob_local_results, root=0)
 
-    prob_results = prob_results.groupby(
-        ['time', 'alpha', 'distance', 'fraction']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
-    ).reset_index(drop = False)
+    if RANK == 0:
 
-    prob_results['alpha'] = prob_results['alpha'].astype(float)
+        # Only root processes all gathered result
+        prob_results = pd.DataFrame(
+            np.concatenate(prob_results, axis=0), columns = [
+                'time',
+                'asset',
+                'day',
+                'alpha',
+                'fraction',
+                'distance',
+                'FIS',
+                'FCS',
+                'SCP'
+            ]
+        )
 
-    prob_results['FCS'] = (prob_results['FCS'] - (1 - prob_results['alpha']))**2
-    prob_results['SCP'] = (prob_results['SCP'] - (1 - prob_results['alpha']))**2
+        prob_results['FIS'] = prob_results['FIS'].astype(float)
+        prob_results['FCS'] = prob_results['FCS'].astype(float)
+        prob_results['SCP'] = prob_results['SCP'].astype(float)
 
-    best_results_fis_ = prob_results.loc[prob_results.groupby(
-        ['time', 'alpha', 'distance']
-    )['FIS'].idxmin()].reset_index(drop=True)
+        prob_results = prob_results.groupby(
+            ['time', 'alpha', 'distance', 'fraction']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+        ).reset_index(drop = False)
 
-    best_results_fis_ = best_results_fis_[['time', 'alpha', 'fraction', 'distance']]
-    best_results_fis_['iteration'] = init
-    best_results_fis_['score'] = 'FIS'
+        prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-    best_results_fcs_ = prob_results.loc[prob_results.groupby(
-        ['time', 'alpha', 'distance']
-    )['FCS'].idxmin()].reset_index(drop=True)
+        prob_results['FCS'] = (prob_results['FCS'] - (1 - prob_results['alpha']))**2
+        prob_results['SCP'] = (prob_results['SCP'] - (1 - prob_results['alpha']))**2
 
-    best_results_fcs_ = best_results_fcs_[['time', 'alpha', 'fraction', 'distance']]
-    best_results_fcs_['iteration'] = init
-    best_results_fcs_['score'] = 'FCS'
+        best_results_fis_ = prob_results.loc[prob_results.groupby(
+            ['time', 'alpha', 'distance']
+        )['FIS'].idxmin()].reset_index(drop=True)
 
-    best_results_scp_ = prob_results.loc[prob_results.groupby(
-        ['time', 'alpha', 'distance']
-    )['SCP'].idxmin()].reset_index(drop=True)
+        best_results_fis_ = best_results_fis_[['time', 'alpha', 'fraction', 'distance']]
+        best_results_fis_['iteration'] = init
+        best_results_fis_['score'] = 'FIS'
 
-    best_results_scp_ = best_results_scp_[['time', 'alpha', 'fraction', 'distance']]
-    best_results_scp_['iteration'] = init
-    best_results_scp_['score'] = 'SCP'
+        best_results_fcs_ = prob_results.loc[prob_results.groupby(
+            ['time', 'alpha', 'distance']
+        )['FCS'].idxmin()].reset_index(drop=True)
 
-    best_results = pd.concat([best_results_fis_, best_results_fcs_, best_results_scp_], axis = 0).reset_index(drop=True)
-    #print(best_results)
+        best_results_fcs_ = best_results_fcs_[['time', 'alpha', 'fraction', 'distance']]
+        best_results_fcs_['iteration'] = init
+        best_results_fcs_['score'] = 'FCS'
 
-    # Overwrite the CSV with the updated data
-    # best_results.to_csv(VALIDATION / f'{resource}/{resource}_{method}_asset-envelop-validation_{time}-{description}.csv', index = False)
+        best_results_scp_ = prob_results.loc[prob_results.groupby(
+            ['time', 'alpha', 'distance']
+        )['SCP'].idxmin()].reset_index(drop=True)
 
-COMM.Barrier()
+        best_results_scp_ = best_results_scp_[['time', 'alpha', 'fraction', 'distance']]
+        best_results_scp_['iteration'] = init
+        best_results_scp_['score'] = 'SCP'
 
-# Broadcast inputs (only needed if not already shared)
-if (RANK == 0) and (ENVELOPE == True):
-    print('----- ENVELOPE TEST -----')
-    best_results_shared = best_results
-else:
+        best_results = pd.concat([best_results_fis_, best_results_fcs_, best_results_scp_], axis = 0).reset_index(drop=True)
+        #print(best_results)
+
+        # Overwrite the CSV with the updated data
+        # best_results.to_csv(VALIDATION / f'{resource}/{resource}_{method}_asset-envelop-validation_{time}-{description}.csv', index = False)
+
+    COMM.Barrier()
+
+    # Broadcast inputs (only needed if not already shared)
     best_results_shared = None
+    if RANK == 0:
+        print('----- ENVELOPE TEST -----')
+        best_results_shared = best_results
 
-if (ENVELOPE == True):
     # Broadcast envelop parameters
     best_results_shared = COMM.bcast(best_results_shared, root=0)
 
     for score in best_results_shared['score'].unique():
         for distance in best_results_shared['distance'].unique():
+            print(score, distance)
 
             k_ = best_results_shared.loc[
                 (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 'fraction'
@@ -1020,7 +1044,7 @@ if (ENVELOPE == True):
                 k_ = k_,
                 time = time
             )
-
+            
             # Gather all local results
             prob_results = COMM.gather(prob_local_results, root=0)
             det_results = COMM.gather(det_local_results, root=0)
@@ -1051,7 +1075,7 @@ if (ENVELOPE == True):
                 ).reset_index(drop = False)
 
                 prob_results['score'] = score
-                prob_results['fraction'] = k_
+                prob_results['fraction'] = prob_results['alpha'].map(dict(zip(alpha_, k_)))
                 prob_results['distance'] = distance
                 prob_results['iteration'] = init
 
@@ -1107,103 +1131,107 @@ if (ENVELOPE == True):
                 results_df.to_csv(results_path, index=False)
                 print(f"Saved results to {results_path}")
 
-    k_ = [None, None, None, None]
-    distance = 'ECDF'
-    score = None
+    # For fknn the parameter is now the layer count L, not a trimming fraction:
+    # larger L = wider band, so L decreases with alpha the way k used to. These
+    # are placeholders until the L grid has been validated on the real sets.
+    for distance, k_, score in zip(['MBD', 'ECDF'], 
+                                   [[0.9, 0.8, 0.7, 0.6], [None, None, None, None]],
+                                   ['nominal', 'nominal']):
+        print(score, distance)
 
-    prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
-        _data,
-        _best_hyper,
-        processes_test_,
-        distances_ = [distance],
-        alpha_ = ALPHAS,
-        k_ = k_,
-        time = time
-    )
+        prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
+            _data,
+            _best_hyper,
+            processes_test_,
+            distances_ = [distance],
+            alpha_ = ALPHAS,
+            k_ = k_,
+            time = time
+        )
 
-    # Gather all local results
-    prob_results = COMM.gather(prob_local_results, root=0)
-    det_results = COMM.gather(det_local_results, root=0)
+        # Gather all local results
+        prob_results = COMM.gather(prob_local_results, root=0)
+        det_results = COMM.gather(det_local_results, root=0)
 
-if (RANK == 0) and (ENVELOPE == True):
+        if RANK == 0:
 
-    # Only root processes all gathered result
-    prob_results = pd.DataFrame(
-        np.concatenate(prob_results, axis=0), columns = [
-            'time',
-            'asset',
-            'day',
-            'alpha',
-            'fraction',
-            'distance',
-            'FIS',
-            'FCS',
-            'SCP'
-        ]
-    )
+            # Only root processes all gathered result
+            prob_results = pd.DataFrame(
+                np.concatenate(prob_results, axis=0), columns = [
+                    'time',
+                    'asset',
+                    'day',
+                    'alpha',
+                    'fraction',
+                    'distance',
+                    'FIS',
+                    'FCS',
+                    'SCP'
+                ]
+            )
 
-    prob_results['FIS'] = prob_results['FIS'].astype(float)
-    prob_results['FCS'] = prob_results['FCS'].astype(float)
-    prob_results['SCP'] = prob_results['SCP'].astype(float)
-    prob_results['alpha'] = prob_results['alpha'].astype(float)
+            prob_results['FIS'] = prob_results['FIS'].astype(float)
+            prob_results['FCS'] = prob_results['FCS'].astype(float)
+            prob_results['SCP'] = prob_results['SCP'].astype(float)
+            prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-    prob_results = prob_results.groupby(
-        ['time', 'alpha']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
-    ).reset_index(drop = False)
+            prob_results = prob_results.groupby(
+                ['time', 'alpha']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+            ).reset_index(drop = False)
 
-    prob_results['score'] = score
-    prob_results['fraction'] = k_
-    prob_results['distance'] = distance
-    prob_results['iteration'] = init
+            prob_results['score'] = score
+            prob_results['fraction'] = k_
+            prob_results['distance'] = distance
+            prob_results['iteration'] = init
 
-    # define envelop file path
-    results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-envelope-{description}.csv'
+            # define envelop file path
+            results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-envelope-{description}.csv'
 
-    # load or create DataFrame
-    results_df =  _read_csv_safe(results_path)
+            # load or create DataFrame
+            results_df =  _read_csv_safe(results_path)
 
-    # append safely
-    results_df = pd.concat([results_df, prob_results], axis = 0, ignore_index=True)
-    #print(results_df)
+            # append safely
+            results_df = pd.concat([results_df, prob_results], axis = 0, ignore_index=True)
+            #print(results_df)
 
-    # save enevelop
-    results_df.to_csv(results_path, index=False)
-    print(f"Saved results to {results_path}")
+            # save enevelop
+            results_df.to_csv(results_path, index=False)
+            print(f"Saved results to {results_path}")
 
-    det_results = pd.DataFrame(
-        np.concatenate(det_results, axis=0), columns = [
-            'time',
-            'asset',
-            'day',
-            'distance',
-            'RMSE',
-            'MAE',
-            'MBE'
-        ]
-    )
+            det_results = pd.DataFrame(
+                np.concatenate(det_results, axis=0), columns = [
+                    'time',
+                    'asset',
+                    'day',
+                    'distance',
+                    'RMSE',
+                    'MAE',
+                    'MBE'
+                ]
+            )
 
-    det_results['RMSE'] = det_results['RMSE'].astype(float)
-    det_results['MAE'] = det_results['MAE'].astype(float)
-    det_results['MBE'] = det_results['MBE'].astype(float)
+            det_results['RMSE'] = det_results['RMSE'].astype(float)
+            det_results['MAE'] = det_results['MAE'].astype(float)
+            det_results['MBE'] = det_results['MBE'].astype(float)
 
-    det_results = det_results.groupby(
-        ['time']).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
-    ).reset_index(drop = False)
+            det_results = det_results.groupby(
+                ['time']).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
+            ).reset_index(drop = False)
 
-    det_results['score'] = score
-    det_results['distance'] = distance
-    det_results['iteration'] = init
+            det_results['score'] = score
+            det_results['distance'] = distance
+            det_results['iteration'] = init
 
-    # define envelop file path
-    results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-error-{description}.csv'
+            # define envelop file path
+            results_path = VALIDATION / f'{resource}/{resource}_{method}_asset-error-{description}.csv'
 
-    # load or create DataFrame
-    results_df =  _read_csv_safe(results_path)
+            # load or create DataFrame
+            results_df =  _read_csv_safe(results_path)
 
-    # append safely
-    results_df = pd.concat([results_df, det_results], axis = 0, ignore_index=True)
-    #print(results_df)
+            # append safely
+            results_df = pd.concat([results_df, det_results], axis = 0, ignore_index=True)
+            #print(results_df)
 
-    # save enevelop
-    results_df.to_csv(results_path, index=False)
-    print(f"Saved results to {results_path}")
+            # save enevelop
+            results_df.to_csv(results_path, index=False)
+            print(f"Saved results to {results_path}")

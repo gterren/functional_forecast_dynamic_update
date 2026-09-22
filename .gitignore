@@ -26,3 +26,6 @@ ENV/
 *.tmp
 *.bak
 *.swp
+
+jobs/logs/*
+!jobs/logs/.gitkeep

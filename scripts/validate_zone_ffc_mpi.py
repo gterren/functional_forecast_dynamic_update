@@ -108,15 +108,15 @@ def _load_dataset(_dataset, region, N_test_samples):
 
 # Run FFC experiments for a given process and set of parameters, and compute confidence bands and scoring rules.
 def _run_ffc_envelope(
-        process_,
-        _data,
-        _bo_params,
-        distances_,
-        fractions_,
-        alpha_,
-        k_,
-        time,
-        N_test_days = 360
+    process_,
+    _data,
+    _bo_params,
+    distances_,
+    fractions_,
+    alpha_,
+    k_,
+    time,
+    N_test_days = 360
 ):
 
     region, day = process_
@@ -160,7 +160,7 @@ def _run_ffc_envelope(
 
     _hyperparams = {**_fixed_hyper[time], **_opt_params,}
 
-    _hyperparams['length_scale_f'] = 1.0 / _hyperparams.pop('tau')
+    _hyperparams['length_scale_f'] = 1. / _hyperparams.pop('tau')
     _hyperparams['length_scale_e'] = _hyperparams.pop('rho_e') * _hyperparams['length_scale_f']
     _hyperparams['length_scale_d'] = _hyperparams.pop('rho_d') * _hyperparams['length_scale_f']
     _hyperparams['kappa_0']        = _hyperparams['kappa']
@@ -179,10 +179,10 @@ def _run_ffc_envelope(
             if (distance == 'ECDF'):
 
                 # Confidence bands from marginal empirical density function
-                f_median_ext_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_bands(
+                f_median_ext_, _upper_ecdf, _lower_ecdf = _fdu.weighted_ecdf_confidence_region(
                     M_hat_, 
                     _fdu.w_prime_, 
-                    alpha_
+                    alpha_,
                 )
 
                 for alpha in alpha_:
@@ -200,14 +200,16 @@ def _run_ffc_envelope(
             if (distance == 'MBD'):
 
                 for fraction in fractions_:
-                    if fraction is not None:
-                        k_ = [fraction, fraction, fraction, fraction]
+                    # a shared grid value overrides the per-alpha k_ handed in by
+                    # the test stage; bind it locally so the next distance in
+                    # distances_ still sees the caller's k_
+                    k_mbd_ = list(k_) if fraction is None else [fraction]*len(alpha_)
 
-                    f_deepest_, _upper_depth, _lower_depth = _fdu.depth_confidence_bands(
+                    f_deepest_, _upper_depth, _lower_depth = _fdu.adjusted_functional_confidence_region(
                         _depth, 
                         M_hat_, 
                         alpha_, 
-                        k_
+                        k_mbd_,
                     )
 
                     for alpha in alpha_:
@@ -222,17 +224,23 @@ def _run_ffc_envelope(
                 f_point_ = f_deepest_
 
             # Focal curve envelope
-            if (distance == 'fknn'):
-
-                J_hat_ = _fdu.focal_curve_envelope(_depth, _fdu.M_ext_, distance, max_iter = 100)
+            if (distance == 'fknn') or (distance == 'l2'):
 
                 for fraction in fractions_:
-                    if fraction is not None:
-                        k_ = [fraction, fraction, fraction, fraction]
 
-                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_bands(
-                        alpha_, 
-                        k_
+                    k_prj_ = list(k_) if fraction is None else [fraction]*len(alpha_)
+
+                    J_hat_ = _fdu.focal_curve_envelope(
+                        None,
+                        _fdu.M_ext_,
+                        dist = distance,
+                        max_iter = 100,
+                    )
+
+                    # no k_: the band is the min/max over all of J_
+                    f_focal_, _upper_focal, _lower_focal = _fdu.focal_envelope_confidence_region(
+                        alpha_,
+                        k_prj_,
                     )
 
                     for alpha in alpha_:
@@ -269,8 +277,9 @@ def _run_ffc_envelope_parallel_mpi(
         alpha_,
         time,
         fractions_ = [None],
-        k_ = None
+        k_ = None,
 ):
+
 
     _func = partial(
         _run_ffc_envelope,
@@ -280,7 +289,7 @@ def _run_ffc_envelope_parallel_mpi(
         fractions_=fractions_,
         alpha_=alpha_,
         k_=k_,
-        time=time
+        time=time,
     )
 
     prob_local_results = []
@@ -367,16 +376,17 @@ def _run_ffc(
         pit_ = _empirical_PIT(f_hat_, M_hat_.T, seed = 1234)
 
         # Confidence bands from depth function
-        f_deepest_ = _fdu.depth_confidence_bands(ModifiedBandDepth(), M_hat_, ALPHAS, ALPHAS)[0]
+        f_deepest_ = _fdu.adjusted_functional_confidence_region(ModifiedBandDepth(), M_hat_, ALPHAS, ALPHAS)[0]
 
         # Confidence bands from marginal empirical density function
-        f_median_, _upper, _lower = _fdu.ecdf_confidence_bands(M_hat_, ALPHAS)
+        f_median_, _upper, _lower = _fdu.weighted_ecdf_confidence_region(M_hat_, _fdu.w_prime_, ALPHAS)
+        f_median_ = np.asarray(f_median_).ravel()
 
         # Scoring rules
         es = _energy_score(M_hat_, f_hat_)
         wis = _weighted_interval_score(f_hat_, f_median_, _lower, _upper, ALPHAS).mean()
         rmse = np.sqrt(np.mean((f_hat_ - _fdu.f_focal_)**2))
-        mae = np.mean(np.absolute(f_hat_ - _fdu.f_focal_))
+        mae = np.mean(np.absolute(f_hat_ - _fdu.f_focal_))  
 
         # Collect scoring rules
         psr_ = np.array([time, region, day, es, wis, rmse, mae])
@@ -629,9 +639,9 @@ print(f'[Process {RANK}-{SIZE}]')
 
 # Fixed parameters depending on interval for solar
 _fixed_hyper = {
-    6:  {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
-    12: {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
-    18: {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.001, 'kappa': 200},
+    6:  {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.01, 'kappa': 200},
+    12: {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.01, 'kappa': 200},
+    18: {'clique_order': 0, 'p_fusion': 1., 'forget_rate_f': 0.5, 'forget_rate_e': 1, 'lookahead_rate': 24, 'tau': 0.01, 'kappa': 200},
 }
 
 # Hyperparameter combinations
@@ -699,21 +709,29 @@ if (HYPERPARAMETERS == True):
         for _ in range(N_bo_iter):
             _func(None)
 
-if (RANK == 0) and (HYPERPARAMETERS == True):
+_best_params = None
+best_score = None
 
+if (RANK == 0) and (HYPERPARAMETERS == True):
     print('----- HYPERPARAMETERS TEST -----')
     # Retrieve best hyperparameters
     best_score = _bo.best_value
     _best_params = _bo.best_params
-    print(best_score)
-    print(_best_params)
-    print(_fixed_hyper[time])
-else:
-    best_score = None
-    _best_params = None
+
+if (HYPERPARAMETERS == False):
+    _df = pd.read_csv(VALIDATION / f'{resource}/{resource}_{method}_zone-hyper-{description}.csv')
+    _row = _df[(_df["initialization"] == init) & (_df["time"] == time)].iloc[0]
+    _best_params = {
+        k: int(_row[k]) if k in ("kappa_0", "nu") else float(_row[k]) 
+        for k in ["rho_e", "rho_d", "nu", "sigma"] 
+    }
 
 # Broadcast best hyperparameters to all ranks
 _best_params = COMM.bcast(_best_params, root=0)
+
+print(best_score)
+print(_best_params)
+print(_fixed_hyper[time])
 
 if (HYPERPARAMETERS == True):
 
@@ -725,6 +743,7 @@ if (HYPERPARAMETERS == True):
         time,
         lambda_0
     )
+
 
 if (RANK == 0) and (HYPERPARAMETERS == True):
 
@@ -837,100 +856,101 @@ if (RANK == 0) and (HYPERPARAMETERS == True):
     print(f"Saved FUNCTIONS to {func_path}")
 
 
-if (RANK == 0) and (ENVELOPE == True):
-    print('----- ENVELOPE VALIDATION -----')
+if ENVELOPE == True:
 
+    if RANK == 0:
+        print('----- ENVELOPE VALIDATION -----')
 
-if (ENVELOPE == True):
+    fractions_ = [0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.175, 0.2, 0.225, 0.25, 0.275, 0.3, 0.325, 0.35, 0.375, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.]
 
     prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
         _data,
         _best_params,
         processes_val_,
-        fractions_ = np.linspace(0.1, 1., 19),
+        #fractions_ = np.linspace(0.1, 1., 19),
+        fractions_ = fractions_,
         alpha_ = [0.1, 0.2, 0.3, 0.4],
-        distances_ = ['MBD', 'fknn'],
+        distances_ = ['MBD', 'fknn', 'l2'],
         time = time
     )
 
     # Gather all local results
     prob_results = COMM.gather(prob_local_results, root=0)
 
-if (RANK == 0) and (ENVELOPE == True):
+    if RANK == 0:
 
-    # Only root processes all gathered result
-    prob_results = pd.DataFrame(
-        _concat_gathered(prob_results), columns = [
-            'time',
-            'zone',
-            'day',
-            'alpha',
-            'fraction',
-            'distance',
-            'FIS',
-            'FCS',
-            'SCP'
-        ]
-    )
+        # Only root processes all gathered result
+        prob_results = pd.DataFrame(
+            _concat_gathered(prob_results), columns = [
+                'time',
+                'zone',
+                'day',
+                'alpha',
+                'fraction',
+                'distance',
+                'FIS',
+                'FCS',
+                'SCP'
+            ]
+        )
 
-    prob_results['FIS'] = prob_results['FIS'].astype(float)
-    prob_results['FCS'] = prob_results['FCS'].astype(float)
-    prob_results['SCP'] = prob_results['SCP'].astype(float)
+        prob_results['FIS'] = prob_results['FIS'].astype(float)
+        prob_results['FCS'] = prob_results['FCS'].astype(float)
+        prob_results['SCP'] = prob_results['SCP'].astype(float)
 
-    prob_results = prob_results.groupby(
-        ['time', 'alpha', 'distance', 'fraction']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
-    ).reset_index(drop = False)
+        prob_results = prob_results.groupby(
+            ['time', 'alpha', 'distance', 'fraction']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+        ).reset_index(drop = False)
 
-    prob_results['alpha'] = prob_results['alpha'].astype(float)
+        prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-    prob_results['FCS'] = (prob_results['FCS'] - (1 - prob_results['alpha']))**2
-    prob_results['SCP'] = (prob_results['SCP'] - (1 - prob_results['alpha']))**2
+        prob_results['FCS'] = (prob_results['FCS'] - (1 - prob_results['alpha']))**2
+        prob_results['SCP'] = (prob_results['SCP'] - (1 - prob_results['alpha']))**2
 
-    best_results_fis_ = prob_results.loc[prob_results.groupby(
-        ['time', 'alpha', 'distance']
-    )['FIS'].idxmin()].reset_index(drop=True)
+        best_results_fis_ = prob_results.loc[prob_results.groupby(
+            ['time', 'alpha', 'distance']
+        )['FIS'].idxmin()].reset_index(drop=True)
 
-    best_results_fis_ = best_results_fis_[['time', 'alpha', 'fraction', 'distance']]
-    best_results_fis_['iteration'] = init
-    best_results_fis_['score'] = 'FIS'
+        best_results_fis_ = best_results_fis_[['time', 'alpha', 'fraction', 'distance']]
+        best_results_fis_['iteration'] = init
+        best_results_fis_['score'] = 'FIS'
 
-    best_results_fcs_ = prob_results.loc[prob_results.groupby(
-        ['time', 'alpha', 'distance']
-    )['FCS'].idxmin()].reset_index(drop=True)
+        best_results_fcs_ = prob_results.loc[prob_results.groupby(
+            ['time', 'alpha', 'distance']
+        )['FCS'].idxmin()].reset_index(drop=True)
 
-    best_results_fcs_ = best_results_fcs_[['time', 'alpha', 'fraction', 'distance']]
-    best_results_fcs_['iteration'] = init
-    best_results_fcs_['score'] = 'FCS'
+        best_results_fcs_ = best_results_fcs_[['time', 'alpha', 'fraction', 'distance']]
+        best_results_fcs_['iteration'] = init
+        best_results_fcs_['score'] = 'FCS'
 
-    best_results_scp_ = prob_results.loc[prob_results.groupby(
-        ['time', 'alpha', 'distance']
-    )['SCP'].idxmin()].reset_index(drop=True)
+        best_results_scp_ = prob_results.loc[prob_results.groupby(
+            ['time', 'alpha', 'distance']
+        )['SCP'].idxmin()].reset_index(drop=True)
 
-    best_results_scp_ = best_results_scp_[['time', 'alpha', 'fraction', 'distance']]
-    best_results_scp_['iteration'] = init
-    best_results_scp_['score'] = 'SCP'
+        best_results_scp_ = best_results_scp_[['time', 'alpha', 'fraction', 'distance']]
+        best_results_scp_['iteration'] = init
+        best_results_scp_['score'] = 'SCP'
 
-    best_results = pd.concat([best_results_fis_, best_results_fcs_, best_results_scp_], axis = 0).reset_index(drop=True)
-    #print(best_results)
+        best_results = pd.concat([best_results_fis_, best_results_fcs_, best_results_scp_], axis = 0).reset_index(drop=True)
+        #print(best_results)
 
-    # Overwrite the CSV with the updated data
-    # best_results.to_csv(VALIDATION / f'{resource}/{resource}_{method}_zone-envelope-validation_{time}-{description}.csv', index = False)
+        # Overwrite the CSV with the updated data
+        # best_results.to_csv(VALIDATION / f'{resource}/{resource}_{method}_zone-envelope-validation_{time}-{description}.csv', index = False)
 
-COMM.Barrier()
+    COMM.Barrier()
 
-# Broadcast inputs (only needed if not already shared)
-if (RANK == 0) and (ENVELOPE == True):
-    print('----- ENVELOPE TEST -----')
-    best_results_shared = best_results
-else:
+    # Broadcast inputs (only needed if not already shared)
     best_results_shared = None
+    if RANK == 0:
+        print('----- ENVELOPE TEST -----')
+        best_results_shared = best_results
 
-if (ENVELOPE == True):
     # Broadcast envelop parameters
     best_results_shared = COMM.bcast(best_results_shared, root=0)
 
     for score in best_results_shared['score'].unique():
         for distance in best_results_shared['distance'].unique():
+            print(score, distance)
 
             k_ = best_results_shared.loc[
                 (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 'fraction'
@@ -939,6 +959,7 @@ if (ENVELOPE == True):
             alpha_ = best_results_shared.loc[
                 (best_results_shared['score'] == score) & (best_results_shared['distance'] == distance), 'alpha'
             ].astype(float).tolist()
+
 
             prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
                 _data, _best_params, processes_test_,
@@ -964,8 +985,7 @@ if (ENVELOPE == True):
                         'distance',
                         'FIS',
                         'FCS',
-                        'SCP'
-                    ]
+                        'SCP']
                 )
 
                 prob_results['FIS'] = prob_results['FIS'].astype(float)
@@ -1034,104 +1054,105 @@ if (ENVELOPE == True):
                 results_df.to_csv(results_path, index=False)
                 print(f"Saved results to {results_path}")
 
-    k_ = [None, None, None, None]
-    distance = 'ECDF'
-    score = None
 
-    prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
-        _data,
-        _best_params,
-        processes_test_,
-        distances_ = [distance],
-        alpha_ = ALPHAS,
-        k_ = k_,
-        time = time
-    )
+    for distance, k_, score in zip(['MBD', 'ECDF'], 
+                                   [[0.9, 0.8, 0.7, 0.6], [None, None, None, None]],
+                                   ['nominal', 'nominal']):
+        print(score, distance)
 
-    # Gather all local results
-    prob_results = COMM.gather(prob_local_results, root=0)
-    det_results = COMM.gather(det_local_results, root=0)
+        prob_local_results, det_local_results = _run_ffc_envelope_parallel_mpi(
+            _data,
+            _best_params,
+            processes_test_,
+            distances_ = [distance],
+            alpha_ = ALPHAS,
+            k_ = k_,
+            time = time
+        )
 
+        # Gather all local results
+        prob_results = COMM.gather(prob_local_results, root=0)
+        det_results = COMM.gather(det_local_results, root=0)
 
-if (RANK == 0) and (ENVELOPE == True):
+        if RANK == 0:
 
-    # Only root processes all gathered result
-    prob_results = pd.DataFrame(
-        _concat_gathered(prob_results), columns = [
-            'time',
-            'zone',
-            'day',
-            'alpha',
-            'fraction',
-            'distance',
-            'FIS',
-            'FCS',
-            'SCP'
-        ]
-    )
+            # Only root processes all gathered result
+            prob_results = pd.DataFrame(
+                _concat_gathered(prob_results), columns = [
+                    'time',
+                    'zone',
+                    'day',
+                    'alpha',
+                    'fraction',
+                    'distance',
+                    'FIS',
+                    'FCS',
+                    'SCP'
+                ]
+            )
 
-    prob_results['FIS'] = prob_results['FIS'].astype(float)
-    prob_results['FCS'] = prob_results['FCS'].astype(float)
-    prob_results['SCP'] = prob_results['SCP'].astype(float)
-    prob_results['alpha'] = prob_results['alpha'].astype(float)
+            prob_results['FIS'] = prob_results['FIS'].astype(float)
+            prob_results['FCS'] = prob_results['FCS'].astype(float)
+            prob_results['SCP'] = prob_results['SCP'].astype(float)
+            prob_results['alpha'] = prob_results['alpha'].astype(float)
 
-    prob_results = prob_results.groupby(
-        ['time', 'alpha']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
-    ).reset_index(drop = False)
+            prob_results = prob_results.groupby(
+                ['time', 'alpha']).agg({'FIS': 'mean', 'FCS': 'mean', 'SCP': 'mean'}
+            ).reset_index(drop = False)
 
-    prob_results['score'] = score
-    prob_results['fraction'] = k_
-    prob_results['distance'] = distance
-    prob_results['iteration'] = init
+            prob_results['score'] = score
+            prob_results['fraction'] = k_
+            prob_results['distance'] = distance
+            prob_results['iteration'] = init
 
-    # define envelop file path
-    results_path = VALIDATION / f'{resource}/{resource}_{method}_zone-envelope-{description}.csv'
+            # define envelop file path
+            results_path = VALIDATION / f'{resource}/{resource}_{method}_zone-envelope-{description}.csv'
 
-    # load or create DataFrame
-    results_df = _read_csv_safe(results_path)
+            # load or create DataFrame
+            results_df = _read_csv_safe(results_path)
 
-    # append safely
-    results_df = pd.concat([results_df, prob_results], axis = 0, ignore_index=True)
-    #print(results_df)
+            # append safely
+            results_df = pd.concat([results_df, prob_results], axis = 0, ignore_index=True)
+            #print(results_df)
 
-    # save enevelop
-    results_df.to_csv(results_path, index=False)
-    print(f"Saved results to {results_path}")
+            # save enevelop
+            results_df.to_csv(results_path, index=False)
+            print(f"Saved results to {results_path}")
 
-    det_results = pd.DataFrame(
-        _concat_gathered(det_results), columns = [
-            'time',
-            'zone',
-            'day',
-            'distance',
-            'RMSE',
-            'MAE',
-            'MBE'
-        ]
-    )
+            det_results = pd.DataFrame(
+                _concat_gathered(det_results), columns = [
+                    'time',
+                    'zone',
+                    'day',
+                    'distance',
+                    'RMSE',
+                    'MAE',
+                    'MBE'
+                ]
+            )
 
-    det_results['RMSE'] = det_results['RMSE'].astype(float)
-    det_results['MAE'] = det_results['MAE'].astype(float)
-    det_results['MBE'] = det_results['MBE'].astype(float)
+            det_results['RMSE'] = det_results['RMSE'].astype(float)
+            det_results['MAE'] = det_results['MAE'].astype(float)
+            det_results['MBE'] = det_results['MBE'].astype(float)
 
-    det_results = det_results.groupby(
-        ['time']).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
-    ).reset_index(drop = False)
+            det_results = det_results.groupby(
+                ['time']).agg({'RMSE': 'mean', 'MAE': 'mean', 'MBE': 'mean'}
+            ).reset_index(drop = False)
 
-    det_results['score'] = score
-    det_results['distance'] = distance
-    det_results['iteration'] = init
+            det_results['score'] = score
+            det_results['distance'] = distance
+            det_results['iteration'] = init
 
-    # define error file path
-    results_path = VALIDATION / f'{resource}/{resource}_{method}_zone-error-{description}.csv'
+            # define error file path
+            results_path = VALIDATION / f'{resource}/{resource}_{method}_zone-error-{description}.csv'
 
-    # load or create DataFrame
-    results_df = _read_csv_safe(results_path)
+            # load or create DataFrame
+            results_df = _read_csv_safe(results_path)
 
-    # append safely
-    results_df = pd.concat([results_df, det_results], axis = 0, ignore_index=True)
-    #print(results_df)
+            # append safely
+            results_df = pd.concat([results_df, det_results], axis = 0, ignore_index=True)
+            #print(results_df)
 
-    # save error
-    results_df.to_csv(results_path, index=False)
-    print(f"Saved results to {results_path}")
+            # save error
+            results_df.to_csv(results_path, index=False)
+            print(f"Saved results to {results_path}")
