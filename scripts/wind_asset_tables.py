@@ -17,11 +17,14 @@ aggregation = "asset"
 
 # ===============================================
 
-exp_description="unbiased-025-6"
-_init = {72: 3, 144: 4, 216: 1}
+exp_description="biased-025-7"
+_init = {72: 1, 144: 1, 216: 1}
 
 exp_description="unbiased-025-7"
 _init = {72: 2, 144: 2, 216: 3}
+
+# exp_description="unbiased-025-7"
+# _init = {72: 3, 144: 4, 216: 2}
 
 hyper_, envelope_ = loader.hyperparameters(
     _init,
@@ -39,17 +42,17 @@ print(hyper_)
 
 # ===============================================
 
-# df_fmt, latex = loader.error_scores(
-#     _init,
-#     resource, 
-#     method,
-#     aggregation,
-#     exp_description,
-#     VALIDATION,
-# )
-# print(df_fmt)
+df_fmt, latex = loader.error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    VALIDATION,
+)
+print(df_fmt)
 
-# (TABLES / f"error_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
+(TABLES / f"error_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
 
 # ===============================================
 
@@ -102,22 +105,98 @@ print(df_fmt['FCS'])
 
 # ===============================================
 
-# LEAD = 24
+LEAD = 24
 
-# df_fmt, latex = loader.ks_by_block(
-#     _init, 
-#     resource, 
-#     method, 
-#     aggregation, 
-#     exp_description,
-#     path_to_validation = VALIDATION,
-#     intervals = [72, 144, 216],
-#     lead = LEAD,
-#     starts = np.arange(0, 287, LEAD),
-#     _KS = KS,
-# )
-# print(df_fmt)
+df_fmt, latex = loader.ks_by_block(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description,
+    path_to_validation = VALIDATION,
+    intervals = [72, 144, 216],
+    lead = LEAD,
+    starts = np.arange(0, 287, LEAD),
+    _KS = KS,
+)
+print(df_fmt)
 
-# (TABLES / f"ks_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
+(TABLES / f"ks_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
 
 # ===============================================
+# ===============================================
+
+LEAD = 24
+
+exp_description = 'unbiased'
+method = 'arima'
+_init = {72: 1, 144: 1, 216: 1}
+
+df_fmt, latex = loader.ks_by_block(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description,
+    path_to_validation = VALIDATION,
+    intervals = [72, 144, 216],
+    lead = LEAD,
+    starts = np.arange(0, 287, LEAD),
+    _KS = KS,
+)
+print(df_fmt)
+
+(TABLES / f"ks_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+
+df_fmt, latex = loader.error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    VALIDATION,
+)
+print(df_fmt)
+
+(TABLES / f"error_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+# ===============================================
+
+LEAD = 24
+
+exp_description = 'unbiased'
+method = 'daref'
+_init = {72: 1, 144: 1, 216: 1}
+
+df_fmt, latex = loader.ks_by_block(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description,
+    path_to_validation = VALIDATION,
+    intervals = [72, 144, 216],
+    lead = LEAD,
+    starts = np.arange(0, 287, LEAD),
+    _KS = KS,
+)
+print(df_fmt)
+
+(TABLES / f"ks_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+
+df_fmt, latex = loader.error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    VALIDATION,
+)
+print(df_fmt)
+
+(TABLES / f"error_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")

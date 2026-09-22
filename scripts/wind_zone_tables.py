@@ -56,8 +56,14 @@ aggregation = 'zone'
 # ===============================================
 # ===============================================
 
+# exp_description="unbiased-025-C0-6"
+# _init = {6: 4, 12: 4, 18: 1}
+# exp_description="unbiased-025-C1-6"
+# _init = {6: 4, 12: 4, 18: 4}
 exp_description="unbiased-025-C1-6"
 _init = {6: 2, 12: 4, 18: 4}
+# exp_description="unbiased-025-C2-6"
+# _init = {6: 4, 12: 1, 18: 3}
 
 hyper_, envelope_ = loader.hyperparameters(
     _init,

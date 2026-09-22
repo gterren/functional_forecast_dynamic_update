@@ -39,10 +39,10 @@ aggregation = 'zone'
 
 exp_description="unbiased-025-C1-1"
 _init = {6: 5, 12: 4, 18: 3}
-
-exp_description="unbiased-025-C1-6"
-#_init = {6: 4, 12: 4, 18: 4}
-_init = {6: 2, 12: 4, 18: 4}
+# exp_description="unbiased-025-C1-6"
+# _init = {6: 2, 12: 4, 18: 4}
+# exp_description="unbiased-025-C1-6"
+# _init = {6: 4, 12: 4, 18: 4}
 
 day = 216
 zone = 1
@@ -98,11 +98,11 @@ print(regions_)
 
 dx_ = np.array([
     (
-        t_ts + timedelta(minutes=0)
+        t_ts + timedelta(minutes=6*60)
     ).strftime('%b %-d %-I%p').replace('AM', 'am').replace('PM', 'pm') 
     for t_ts in t_ts_[day, interval]
 ])
-
+print(dx_)
 # ===============================================
 
 file_name = f"{resource}_zone-{region}_{day}_{interval}"
@@ -323,7 +323,6 @@ plt.show()
 
 depth_score_, depth_rank_ = _fdu.get_depth(_depth, E_tr_p_[_fdu.idx_x_, :])
 
-# Calculate confidence intervals from Directional Quantiles
 f_deepest_ext_, _upper, _lower = _fdu.functional_boxplot(
     E_tr_p_[_fdu.idx_x_, :], 
     depth_score_,
@@ -524,7 +523,7 @@ for interval in range(0, 24, 1):
 
     dx_ = np.array([
         (
-            t_ts + timedelta(minutes=0)
+            t_ts + timedelta(minutes=30*60)
         ).strftime('%b %-d %-I%p').replace('AM', 'am').replace('PM', 'pm') 
         for t_ts in t_ts_[day, interval]
     ])
@@ -630,8 +629,6 @@ plotter.plot_zonal_dynamic_update(
     range_=[0, 70],
     n = 220,
 )
-
-leg.set_zorder(100)
 
 plt.savefig(IMAGES / f"focal_update-{file_name}.pdf")
 

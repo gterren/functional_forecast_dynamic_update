@@ -18,7 +18,8 @@ aggregation = "asset"
 # ===============================================
 
 exp_description="unbiased-025-6"
-_init = {120: 1, 132: 2, 144: 2, 168: 3}
+#_init = {120: 1, 132: 2, 144: 2, 168: 3}
+_init = {120: 4, 132: 2, 144: 3, 168: 3}
 
 hyper_, envelope_ = loader.hyperparameters(
     _init,
@@ -69,7 +70,7 @@ df_fmt, latex = loader.ks_by_block(
     aggregation, 
     exp_description,
     path_to_validation = VALIDATION,
-    intervals = [120, 144, 168],
+    intervals = [120, 132, 144, 168],
     lead = LEAD,
     starts = np.arange(71, 215, LEAD),
     _KS = KS,
@@ -79,3 +80,118 @@ print(df_fmt)
 (TABLES / f"ks_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
 
 # ===============================================
+# ===============================================
+
+LEAD = 24
+
+exp_description = 'unbiased'
+method = 'prophet'
+_init = {120: 1, 132: 1, 144: 1, 168: 1}
+
+df_fmt, latex = loader.ks_by_block(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description,
+    path_to_validation = VALIDATION,
+    intervals = [120, 132, 144, 168],
+    lead = LEAD,
+    starts = np.arange(0, 287, LEAD),
+    _KS = KS,
+)
+print(df_fmt)
+
+(TABLES / f"ks_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+
+df_fmt, latex = loader.error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    VALIDATION,
+)
+print(df_fmt)
+
+(TABLES / f"error_{resource}_{aggregation}_{exp_description}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+# ===============================================
+
+LEAD = 24
+
+exp_description = 'unbiased'
+method = 'prophet'
+_init = {120: 1, 132: 1, 144: 1, 168: 1}
+
+df_fmt, latex = loader.ks_by_block(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description,
+    path_to_validation = VALIDATION,
+    intervals = [120, 132, 144, 168],
+    lead = LEAD,
+    starts = np.arange(0, 287, LEAD),
+    _KS = KS,
+)
+print(df_fmt)
+
+(TABLES / f"ks_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+
+df_fmt, latex = loader.error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    VALIDATION,
+)
+print(df_fmt)
+
+(TABLES / f"error_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+# ===============================================
+
+LEAD = 24
+
+exp_description = 'unbiased'
+method = 'daref'
+_init = {120: 1, 132: 1, 144: 1, 168: 1}
+
+df_fmt, latex = loader.ks_by_block(
+    _init, 
+    resource, 
+    method, 
+    aggregation, 
+    exp_description,
+    path_to_validation = VALIDATION,
+    intervals = [120, 132, 144, 168],
+    lead = LEAD,
+    starts = np.arange(0, 287, LEAD),
+    _KS = KS,
+)
+print(df_fmt)
+
+(TABLES / f"ks_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")
+
+# ===============================================
+
+df_fmt, latex = loader.error_scores(
+    _init,
+    resource, 
+    method,
+    aggregation,
+    exp_description,
+    VALIDATION,
+)
+print(df_fmt)
+
+(TABLES / f"error_{resource}_{aggregation}_{method}.tex").write_text(latex, encoding = "utf-8")

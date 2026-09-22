@@ -2693,7 +2693,7 @@ def plot_zonal_dynamic_update(
             orientation="horizontal",
         )
 
-        cbar.set_ticks([0, len(F_curves_)], labels=["Aug 1 6pm", "Aug 4 6pm"], size=12)
+        cbar.set_ticks([0, len(F_curves_)], labels=["Aug 3 12am", "Aug 6 12am"], size=12)
 
         # cbar.ax.tick_params(length=0)
 

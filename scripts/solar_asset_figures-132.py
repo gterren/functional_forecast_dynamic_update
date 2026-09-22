@@ -198,7 +198,7 @@ plotter.plot_depth(
     interval = interval,
     n=120,
     range_=range_,
-    colorbar_pos = [1110, 75, 150, 5],
+    colorbar_pos = [1125, 75, 150, 5],
     colorbar=True,
     labels_1=True,
 )

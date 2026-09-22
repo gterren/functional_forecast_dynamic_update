@@ -33,10 +33,12 @@ method = "fusion"
 resource = "wind"
 aggregation = "asset"
 
-exp_description="unbiased-025-6"
-_init = {72: 3, 144: 4, 216: 1}
+# exp_description="unbiased-025-6"
+# _init = {72: 3, 144: 4, 216: 1}
+# exp_description="unbiased-025-7"
+# _init = {72: 3, 144: 4, 216: 2}
 exp_description="unbiased-025-7"
-_init = {72: 3, 144: 4, 216: 2}
+_init = {72: 2, 144: 2, 216: 3}
 
 # Blanco Canyon 18 112 in 176
 # Black Jack Creek Wind 17 289
